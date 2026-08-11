@@ -1,28 +1,35 @@
 """
 Cash Book Service
-Generates cash book reports from the current MyXpense schema.
+Generates cash / bank book reports from the Expenzo accounting schema.
+
+The primary data source is ``voucher_details`` joined to ``vouchers`` for
+accounts belonging to the Cash-in-Hand (cash book) or Bank Accounts (bank
+book) groups. Cancelled vouchers are excluded. The legacy personal
+``transactions`` path is retained as a read-only fallback so old data still
+renders, but new entries always go through vouchers.
 """
 from __future__ import annotations
 
 import csv
 import logging
 from datetime import date, datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import config
 from database.database import db
-from services.party_ledger_service import PartyLedgerService
 from utils.report_exporter import report_exporter
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+GROUP_CASH = 'Cash-in-Hand'
+GROUP_BANK = 'Bank Accounts'
+
+STATUS_CANCELLED = 'Cancelled'
+
 
 class CashBookService:
-    """Service for cash book reports."""
-
-    CASH_KEYWORDS = ("cash", "bank")
+    """Service for cash and bank book reports (Expenzo voucher data)."""
 
     @staticmethod
     def _round_amount(value: float) -> float:
@@ -41,274 +48,353 @@ class CashBookService:
                 return default
 
     @staticmethod
-    def _table_columns(table_name: str) -> List[str]:
-        try:
-            rows = db.fetch_all(f"PRAGMA table_info({table_name})")
-            return [str(CashBookService._row_value(row, "name", "")) for row in rows]
-        except Exception:
-            return []
+    def _parse_date(value: Any) -> date:
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
+                try:
+                    return datetime.strptime(value, fmt).date()
+                except ValueError:
+                    continue
+        return date(1900, 1, 1)
 
     @staticmethod
-    def _pick_column(columns: List[str], candidates: List[str]) -> Optional[str]:
-        lookup = {column.lower(): column for column in columns}
-        for candidate in candidates:
-            if candidate.lower() in lookup:
-                return lookup[candidate.lower()]
-        return None
+    def _book_accounts(company_id: int, book_group: str, include_inactive: bool = False) -> List[Dict[str, Any]]:
+        """Active accounts in the given book group for a company."""
+        where = ["company_id = ?", "LOWER(account_group) = LOWER(?)"]
+        params: List[Any] = [company_id, book_group]
+        if not include_inactive:
+            where.append("is_active = 1")
+        rows = db.fetch_all(
+            f"""
+            SELECT id, company_id, name, code, account_group,
+                   opening_balance, opening_balance_type, is_active
+            FROM accounts
+            WHERE {' AND '.join(where)}
+            ORDER BY name
+            """,
+            tuple(params),
+        )
+        accounts: List[Dict[str, Any]] = []
+        for row in rows:
+            opening = float(CashBookService._row_value(row, 'opening_balance', 0.0) or 0.0)
+            opening_type = CashBookService._row_value(row, 'opening_balance_type', 'Debit')
+            signed = opening if opening_type == 'Debit' else -opening
+            accounts.append({
+                'id': CashBookService._row_value(row, 'id'),
+                'company_id': CashBookService._row_value(row, 'company_id'),
+                'name': CashBookService._row_value(row, 'name', ''),
+                'code': CashBookService._row_value(row, 'code', ''),
+                'account_group': CashBookService._row_value(row, 'account_group', ''),
+                'opening_balance': opening,
+                'opening_balance_type': opening_type,
+                'signed_opening': signed,
+                'is_active': bool(CashBookService._row_value(row, 'is_active', 1)),
+            })
+        return accounts
 
     @staticmethod
     def _get_cash_sources(company_id: int) -> List[Dict[str, Any]]:
-        try:
-            columns = CashBookService._table_columns("bank_accounts")
-            if not columns:
-                return []
-
-            id_col = CashBookService._pick_column(columns, ["id"])
-            name_col = CashBookService._pick_column(columns, ["bank_name", "name"])
-            number_col = CashBookService._pick_column(columns, ["account_number", "number"])
-            type_col = CashBookService._pick_column(columns, ["account_type", "type"])
-            opening_col = CashBookService._pick_column(columns, ["opening_balance"])
-            current_col = CashBookService._pick_column(columns, ["current_balance"])
-            color_col = CashBookService._pick_column(columns, ["color_code"])
-
-            select_columns = [c for c in [id_col, name_col, number_col, type_col, opening_col, current_col, color_col] if c]
-            rows = db.fetch_all(f"SELECT {', '.join(select_columns)} FROM bank_accounts ORDER BY {name_col or id_col}")
-            bank_items: List[Dict[str, Any]] = []
-            for row in rows:
-                bank_items.append({
-                    "id": CashBookService._row_value(row, id_col),
-                    "name": CashBookService._row_value(row, name_col, ""),
-                    "account_number": CashBookService._row_value(row, number_col, ""),
-                    "account_type": CashBookService._row_value(row, type_col, ""),
-                    "opening_balance": float(CashBookService._row_value(row, opening_col, 0.0) or 0.0),
-                    "current_balance": float(CashBookService._row_value(row, current_col, 0.0) or 0.0),
-                    "color_code": CashBookService._row_value(row, color_col, ""),
-                })
-            return bank_items
-        except Exception as e:
-            logger.error(f"Error getting cash sources: {e}")
-            return []
-
-    @staticmethod
-    def _get_transactions(from_date: date, to_date: date, account_id: Optional[int] = None) -> List[Dict[str, Any]]:
-        try:
-            columns = CashBookService._table_columns("transactions")
-            if not columns:
-                return []
-
-            id_col = CashBookService._pick_column(columns, ["id"])
-            date_col = CashBookService._pick_column(columns, ["transaction_date", "date", "txn_date", "entry_date"])
-            party_col = CashBookService._pick_column(columns, ["party_id", "account_id", "customer_id", "supplier_id"])
-            category_col = CashBookService._pick_column(columns, ["category_id", "category"])
-            transfer_col = CashBookService._pick_column(columns, ["transfer_id"])
-            ref_col = CashBookService._pick_column(columns, ["reference_number", "reference", "ref_no", "voucher_number"])
-            narration_col = CashBookService._pick_column(columns, ["narration", "description", "remarks", "note"])
-            debit_col = CashBookService._pick_column(columns, ["debit_amount", "debit"])
-            credit_col = CashBookService._pick_column(columns, ["credit_amount", "credit"])
-            amount_col = CashBookService._pick_column(columns, ["amount", "transaction_amount", "net_amount"])
-            direction_col = CashBookService._pick_column(columns, ["direction", "entry_side", "dr_cr"])
-            status_col = CashBookService._pick_column(columns, ["status", "is_posted", "posted"])
-            account_col = CashBookService._pick_column(columns, ["bank_account_id", "cash_account_id", "account_id"])
-
-            if not date_col:
-                return []
-
-            select_columns = [c for c in [id_col, date_col, party_col, category_col, transfer_col, ref_col, narration_col, debit_col, credit_col, amount_col, direction_col, status_col, account_col] if c]
-            where_clauses = [f"{date_col} BETWEEN ? AND ?"]
-            params: List[Any] = [from_date.isoformat(), to_date.isoformat()]
-            if account_id is not None and account_col:
-                where_clauses.append(f"{account_col} = ?")
-                params.append(account_id)
-            query = f"""
-                SELECT {', '.join(select_columns)}
-                FROM transactions
-                WHERE {' AND '.join(where_clauses)}
-                ORDER BY {date_col}, {id_col or date_col}
-            """
-            rows = db.fetch_all(query, tuple(params))
-            transactions: List[Dict[str, Any]] = []
-            for row in rows:
-                debit_value = float(CashBookService._row_value(row, debit_col, 0.0) or 0.0) if debit_col else 0.0
-                credit_value = float(CashBookService._row_value(row, credit_col, 0.0) or 0.0) if credit_col else 0.0
-                amount_value = float(CashBookService._row_value(row, amount_col, 0.0) or 0.0) if amount_col else debit_value - credit_value
-                if debit_col is None and credit_col is None:
-                    direction = str(CashBookService._row_value(row, direction_col, "debit")).lower() if direction_col else "debit"
-                    if direction in ("credit", "cr", "out", "payment"):
-                        credit_value = abs(amount_value)
-                        debit_value = 0.0
-                    else:
-                        debit_value = abs(amount_value)
-                        credit_value = 0.0
-                tx_date_raw = CashBookService._row_value(row, date_col)
-                transactions.append({
-                    "id": CashBookService._row_value(row, id_col),
-                    "transaction_date": tx_date_raw if isinstance(tx_date_raw, str) else (tx_date_raw.isoformat() if hasattr(tx_date_raw, "isoformat") else tx_date_raw),
-                    "party_id": CashBookService._row_value(row, party_col),
-                    "category_id": CashBookService._row_value(row, category_col),
-                    "transfer_id": CashBookService._row_value(row, transfer_col),
-                    "reference_number": CashBookService._row_value(row, ref_col, ""),
-                    "narration": CashBookService._row_value(row, narration_col, ""),
-                    "debit_amount": debit_value,
-                    "credit_amount": credit_value,
-                    "amount": amount_value,
-                    "account_id": CashBookService._row_value(row, account_col),
-                    "status": CashBookService._row_value(row, status_col, ""),
-                })
-            return transactions
-        except Exception as e:
-            logger.error(f"Error getting transactions: {e}")
-            return []
-
-    @staticmethod
-    def _is_cash_related(transaction: Dict[str, Any]) -> bool:
-        text = " ".join(
-            str(transaction.get(field, "") or "").lower()
-            for field in ("reference_number", "narration", "status")
+        """Cash + bank accounts combined (used by the account selector)."""
+        return (
+            CashBookService._book_accounts(company_id, GROUP_CASH)
+            + CashBookService._book_accounts(company_id, GROUP_BANK)
         )
-        return any(keyword in text for keyword in CashBookService.CASH_KEYWORDS)
+
+    @staticmethod
+    def _get_expenzo_book_transactions(
+        company_id: int,
+        book_group: str,
+        from_date: date,
+        to_date: date,
+        account_id: Optional[int] = None,
+    ) -> Tuple[List[Dict[str, Any]], float]:
+        """Voucher detail lines for the book's accounts.
+
+        Returns (transactions, opening_balance) where opening_balance is the
+        sum of signed opening balances for the accounts in scope.
+        """
+        accounts = CashBookService._book_accounts(company_id, book_group)
+        if account_id is not None:
+            accounts = [a for a in accounts if a['id'] == account_id]
+
+        opening_balance = sum(a['signed_opening'] for a in accounts)
+
+        if not accounts:
+            return [], opening_balance
+
+        account_ids = [a['id'] for a in accounts]
+        placeholders = ','.join('?' * len(account_ids))
+
+        rows = db.fetch_all(
+            f"""
+            SELECT
+                v.id AS voucher_id,
+                v.voucher_number,
+                v.voucher_type,
+                v.voucher_date,
+                v.reference_number,
+                v.narration,
+                v.status,
+                vd.id AS detail_id,
+                vd.debit_amount,
+                vd.credit_amount,
+                vd.narration AS detail_narration,
+                vd.account_id,
+                a.name AS account_name,
+                a.code AS account_code
+            FROM voucher_details vd
+            JOIN vouchers v ON v.id = vd.voucher_id
+            LEFT JOIN accounts a ON a.id = vd.account_id
+            WHERE vd.account_id IN ({placeholders})
+              AND v.company_id = ?
+              AND v.status != ?
+            ORDER BY v.voucher_date, v.id, vd.id
+            """,
+            tuple(account_ids) + (company_id, STATUS_CANCELLED),
+        )
+
+        transactions: List[Dict[str, Any]] = []
+        for row in rows:
+            txn_date = CashBookService._parse_date(
+                CashBookService._row_value(row, 'voucher_date'))
+            if txn_date < from_date or txn_date > to_date:
+                continue
+            debit = float(CashBookService._row_value(row, 'debit_amount', 0.0) or 0.0)
+            credit = float(CashBookService._row_value(row, 'credit_amount', 0.0) or 0.0)
+            transactions.append({
+                'voucher_id': CashBookService._row_value(row, 'voucher_id'),
+                'voucher_number': CashBookService._row_value(row, 'voucher_number', ''),
+                'voucher_type': CashBookService._row_value(row, 'voucher_type', ''),
+                'transaction_date': CashBookService._row_value(row, 'voucher_date', ''),
+                'reference_number': CashBookService._row_value(row, 'reference_number', ''),
+                'narration': (CashBookService._row_value(row, 'detail_narration', '')
+                              or CashBookService._row_value(row, 'narration', '')),
+                'debit_amount': debit,
+                'credit_amount': credit,
+                'account_id': CashBookService._row_value(row, 'account_id'),
+                'account_name': CashBookService._row_value(row, 'account_name', ''),
+                'account_code': CashBookService._row_value(row, 'account_code', ''),
+                'status': CashBookService._row_value(row, 'status', ''),
+            })
+        return transactions, opening_balance
 
     @staticmethod
     def _classify_transaction(transaction: Dict[str, Any]) -> str:
-        debit = float(transaction.get("debit_amount", 0.0) or 0.0)
-        credit = float(transaction.get("credit_amount", 0.0) or 0.0)
-        if credit > debit:
-            return "Receipt"
+        debit = float(transaction.get('debit_amount', 0.0) or 0.0)
+        credit = float(transaction.get('credit_amount', 0.0) or 0.0)
         if debit > credit:
-            return "Payment"
-        return "Transfer"
+            return 'Receipt'
+        if credit > debit:
+            return 'Payment'
+        return 'Transfer'
 
     @staticmethod
-    def generate_cash_book(company_id: int, from_date: date, to_date: date, account_id: Optional[int] = None) -> Dict[str, Any]:
+    def _legacy_transactions(from_date: date, to_date: date, account_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Read-only fallback over the legacy personal ``transactions`` table."""
         try:
-            cash_sources = CashBookService._get_cash_sources(company_id)
-            if account_id is not None and account_id != 0:
-                cash_sources = [item for item in cash_sources if item.get("id") == account_id]
-            transactions = CashBookService._get_transactions(from_date, to_date, account_id if account_id not in (None, 0) else None)
+            rows = db.fetch_all("PRAGMA table_info(transactions)")
+            columns = [str(CashBookService._row_value(r, 'name', '')) for r in rows]
+            if 'id' not in columns or 'transaction_date' not in columns:
+                return []
 
-            cash_transactions: List[Dict[str, Any]] = []
-            opening_balance = 0.0
+            date_col = 'transaction_date'
+            ref_col = 'reference_number' if 'reference_number' in columns else 'notes'
+            narration_col = 'notes' if 'notes' in columns else 'title'
+            amount_col = 'amount' if 'amount' in columns else None
+            type_col = 'type' if 'type' in columns else None
+            bank_col = 'bank_account_id' if 'bank_account_id' in columns else None
+            mode_col = 'account_mode' if 'account_mode' in columns else None
 
-            for item in cash_sources:
-                opening_balance += float(item.get("opening_balance", 0.0) or 0.0)
-                opening_balance += float(item.get("current_balance", 0.0) or 0.0)
+            select_cols = [c for c in
+                           ['id', date_col, ref_col, narration_col, amount_col,
+                            type_col, bank_col, mode_col] if c]
+            rows = db.fetch_all(
+                f"SELECT {', '.join(select_cols)} FROM transactions ORDER BY {date_col}, id")
 
-            running_balance = opening_balance
-            total_receipts = 0.0
-            total_payments = 0.0
-
-            for transaction in transactions:
-                if not CashBookService._is_cash_related(transaction):
+            transactions: List[Dict[str, Any]] = []
+            for row in rows:
+                tx_date = CashBookService._parse_date(row[date_col])
+                if tx_date < from_date or tx_date > to_date:
                     continue
-
-                txn_type = CashBookService._classify_transaction(transaction)
-                debit = float(transaction.get("debit_amount", 0.0) or 0.0)
-                credit = float(transaction.get("credit_amount", 0.0) or 0.0)
-                if txn_type == "Receipt":
-                    running_balance += abs(credit - debit)
-                    total_receipts += abs(credit - debit)
-                elif txn_type == "Payment":
-                    running_balance -= abs(debit - credit)
-                    total_payments += abs(debit - credit)
-
-                cash_transactions.append({
-                    **transaction,
-                    "transaction_type": txn_type,
-                    "running_balance": CashBookService._round_amount(running_balance),
-                    "balance_type": "Debit" if running_balance >= 0 else "Credit",
+                if account_id is not None and bank_col and row[bank_col] != account_id:
+                    continue
+                amount = float(row[amount_col] or 0.0) if amount_col else 0.0
+                txn_type = str(row[type_col] or '') if type_col else ''
+                mode = str(row[mode_col] or '') if mode_col else ''
+                if mode == 'Bank':
+                    continue
+                if txn_type == 'Expense':
+                    debit, credit = 0.0, amount
+                else:
+                    debit, credit = amount, 0.0
+                transactions.append({
+                    'voucher_number': '',
+                    'voucher_type': 'Legacy',
+                    'transaction_date': row[date_col],
+                    'reference_number': str(row[ref_col] or '') if ref_col else '',
+                    'narration': str(row[narration_col] or '') if narration_col else '',
+                    'debit_amount': debit,
+                    'credit_amount': credit,
+                    'account_name': '',
+                    'account_code': '',
                 })
+            return transactions
+        except Exception as exc:
+            logger.error(f"Error reading legacy transactions: {exc}")
+            return []
 
-            closing_balance = running_balance
-            report = {
-                "success": True,
-                "report_type": "Cash Book",
-                "company_id": company_id,
-                "account_id": account_id if account_id not in (None, 0) else None,
-                "from_date": from_date.isoformat(),
-                "to_date": to_date.isoformat(),
-                "opening_balance": CashBookService._round_amount(opening_balance),
-                "receipts": CashBookService._round_amount(total_receipts),
-                "payments": CashBookService._round_amount(total_payments),
-                "transactions": cash_transactions,
-                "closing_balance": {
-                    "amount": CashBookService._round_amount(abs(closing_balance)),
-                    "type": "Debit" if closing_balance >= 0 else "Credit",
-                },
-                "transaction_count": len(cash_transactions),
-                "generated_at": datetime.now().isoformat(),
-            }
-            return report
-        except Exception as e:
-            logger.error(f"Error generating cash book: {e}")
-            return {"success": False, "error": f"Failed to generate cash book: {str(e)}"}
+    @staticmethod
+    def generate_cash_book(
+        company_id: int,
+        from_date: date,
+        to_date: date,
+        account_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Cash book: accounts in the Cash-in-Hand group."""
+        try:
+            transactions, opening_balance = CashBookService._get_expenzo_book_transactions(
+                company_id, GROUP_CASH, from_date, to_date, account_id)
+            # Legacy fallback only when this company has no Expenzo vouchers
+            # at all (so old personal cash data still renders).
+            if not transactions:
+                voucher_count = db.fetch_one(
+                    "SELECT COUNT(*) AS count FROM vouchers WHERE company_id = ? AND status != ?",
+                    (company_id, STATUS_CANCELLED),
+                )
+                count = int(CashBookService._row_value(voucher_count, 'count', 0) or 0) if voucher_count else 0
+                if count == 0:
+                    legacy = CashBookService._legacy_transactions(from_date, to_date, account_id)
+                    if legacy:
+                        transactions = legacy
+                        opening_balance = 0.0
+
+            return CashBookService._build_book(
+                'Cash Book', company_id, from_date, to_date, transactions, opening_balance)
+        except Exception as exc:
+            logger.error(f"Error generating cash book: {exc}")
+            return {'success': False, 'error': f"Failed to generate cash book: {str(exc)}"}
+
+    @staticmethod
+    def generate_bank_book(
+        company_id: int,
+        from_date: date,
+        to_date: date,
+        account_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Bank book: accounts in the Bank Accounts group."""
+        try:
+            transactions, opening_balance = CashBookService._get_expenzo_book_transactions(
+                company_id, GROUP_BANK, from_date, to_date, account_id)
+            return CashBookService._build_book(
+                'Bank Book', company_id, from_date, to_date, transactions, opening_balance)
+        except Exception as exc:
+            logger.error(f"Error generating bank book: {exc}")
+            return {'success': False, 'error': f"Failed to generate bank book: {str(exc)}"}
+
+    @staticmethod
+    def _build_book(
+        report_type: str,
+        company_id: int,
+        from_date: date,
+        to_date: date,
+        transactions: List[Dict[str, Any]],
+        opening_balance: float,
+    ) -> Dict[str, Any]:
+        running_balance = opening_balance
+        total_receipts = 0.0
+        total_payments = 0.0
+
+        for transaction in transactions:
+            txn_type = CashBookService._classify_transaction(transaction)
+            debit = float(transaction.get('debit_amount', 0.0) or 0.0)
+            credit = float(transaction.get('credit_amount', 0.0) or 0.0)
+            if txn_type == 'Receipt':
+                running_balance += debit
+                total_receipts += debit
+            elif txn_type == 'Payment':
+                running_balance -= credit
+                total_payments += credit
+            transaction['transaction_type'] = txn_type
+            transaction['running_balance'] = CashBookService._round_amount(abs(running_balance))
+            transaction['balance_type'] = 'Debit' if running_balance >= 0 else 'Credit'
+
+        closing_balance = running_balance
+        return {
+            'success': True,
+            'report_type': report_type,
+            'company_id': company_id,
+            'from_date': from_date.isoformat(),
+            'to_date': to_date.isoformat(),
+            'opening_balance': CashBookService._round_amount(opening_balance),
+            'receipts': CashBookService._round_amount(total_receipts),
+            'payments': CashBookService._round_amount(total_payments),
+            'transactions': transactions,
+            'closing_balance': {
+                'amount': CashBookService._round_amount(abs(closing_balance)),
+                'type': 'Debit' if closing_balance >= 0 else 'Credit',
+            },
+            'transaction_count': len(transactions),
+            'generated_at': datetime.now().isoformat(),
+        }
 
     @staticmethod
     def search_transactions(cash_book_data: Dict[str, Any], search_term: str) -> Dict[str, Any]:
         try:
-            if not cash_book_data.get("success"):
+            if not cash_book_data.get('success'):
                 return cash_book_data
-
             search_lower = search_term.lower()
-            filtered_transactions = [
-                txn for txn in cash_book_data.get("transactions", [])
-                if search_lower in str(txn.get("reference_number", "")).lower()
-                or search_lower in str(txn.get("narration", "")).lower()
-                or search_lower in str(txn.get("transaction_type", "")).lower()
+            filtered = [
+                txn for txn in cash_book_data.get('transactions', [])
+                if search_lower in str(txn.get('reference_number', '')).lower()
+                or search_lower in str(txn.get('narration', '')).lower()
+                or search_lower in str(txn.get('voucher_number', '')).lower()
+                or search_lower in str(txn.get('voucher_type', '')).lower()
             ]
-
-            running_balance = float(cash_book_data.get("opening_balance", 0.0) or 0.0)
-            for transaction in filtered_transactions:
-                txn_type = transaction.get("transaction_type")
-                if txn_type == "Receipt":
-                    running_balance += abs(float(transaction.get("credit_amount", 0.0) or 0.0) - float(transaction.get("debit_amount", 0.0) or 0.0))
-                elif txn_type == "Payment":
-                    running_balance -= abs(float(transaction.get("debit_amount", 0.0) or 0.0) - float(transaction.get("credit_amount", 0.0) or 0.0))
-                transaction["running_balance"] = CashBookService._round_amount(running_balance)
-                transaction["balance_type"] = "Debit" if running_balance >= 0 else "Credit"
-
-            filtered_data = cash_book_data.copy()
-            filtered_data["transactions"] = filtered_transactions
-            filtered_data["transaction_count"] = len(filtered_transactions)
-            return filtered_data
-        except Exception as e:
-            logger.error(f"Error searching transactions: {e}")
+            data = dict(cash_book_data)
+            data['transactions'] = filtered
+            data['transaction_count'] = len(filtered)
+            return data
+        except Exception as exc:
+            logger.error(f"Error searching cash book: {exc}")
             return cash_book_data
 
     @staticmethod
     def export_cash_book_to_csv(report_data: Dict[str, Any], filename: str = "cash_book") -> Tuple[bool, str]:
         try:
-            if not report_data.get("success"):
+            if not report_data.get('success'):
                 return False, "Invalid report data"
-
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             file_path = config.EXPORTS_DIR / f"{filename}_{timestamp}.csv"
             file_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(file_path, "w", newline="", encoding="utf-8") as csvfile:
+            with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile)
-                writer.writerow(["Cash Book"])
-                writer.writerow(["Period:", f"{report_data.get('from_date', '')} to {report_data.get('to_date', '')}"])
-                writer.writerow(["Opening Balance:", report_data.get("opening_balance", 0.0)])
-                writer.writerow(["Receipts:", report_data.get("receipts", 0.0)])
-                writer.writerow(["Payments:", report_data.get("payments", 0.0)])
-                writer.writerow(["Closing Balance:", report_data.get("closing_balance", {}).get("amount", 0.0), report_data.get("closing_balance", {}).get("type", "")])
+                writer.writerow([report_data.get('report_type', 'Cash Book')])
+                writer.writerow(['Period:', f"{report_data.get('from_date', '')} to {report_data.get('to_date', '')}"])
+                writer.writerow(['Opening Balance:', f"{report_data.get('opening_balance', 0):,.2f}"])
+                writer.writerow(['Receipts:', f"{report_data.get('receipts', 0):,.2f}"])
+                writer.writerow(['Payments:', f"{report_data.get('payments', 0):,.2f}"])
+                writer.writerow(['Closing Balance:', f"{report_data.get('closing_balance', {}).get('amount', 0):,.2f}",
+                                 report_data.get('closing_balance', {}).get('type', '')])
                 writer.writerow([])
-                writer.writerow(["Date", "Reference", "Type", "Narration", "Debit", "Credit", "Running Balance", "Dr/Cr"])
-                for txn in report_data.get("transactions", []):
+                writer.writerow(['Date', 'Voucher No.', 'Type', 'Reference', 'Narration', 'Debit', 'Credit', 'Running Balance', 'Dr/Cr'])
+                for txn in report_data.get('transactions', []):
                     writer.writerow([
-                        txn.get("transaction_date", ""),
-                        txn.get("reference_number", ""),
-                        txn.get("transaction_type", ""),
-                        txn.get("narration", ""),
+                        txn.get('transaction_date', ''),
+                        txn.get('voucher_number', ''),
+                        txn.get('voucher_type', ''),
+                        txn.get('reference_number', ''),
+                        txn.get('narration', ''),
                         f"{txn.get('debit_amount', 0):,.2f}",
                         f"{txn.get('credit_amount', 0):,.2f}",
                         f"{txn.get('running_balance', 0):,.2f}",
-                        txn.get("balance_type", ""),
+                        txn.get('balance_type', ''),
                     ])
-
             return True, str(file_path)
-        except Exception as e:
-            logger.error(f"Error exporting cash book to CSV: {e}")
-            return False, f"Export failed: {str(e)}"
+        except Exception as exc:
+            logger.error(f"Error exporting cash book: {exc}")
+            return False, f"Export failed: {str(exc)}"
 
     @staticmethod
     def export_to_json(data: Dict[str, Any], filename: str) -> Tuple[bool, str]:

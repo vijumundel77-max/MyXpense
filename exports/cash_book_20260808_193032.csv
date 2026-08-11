@@ -1,0 +1,10 @@
+Cash Book
+Period:,2026-07-01 to 2026-07-31
+Opening Balance:,0.0
+Receipts:,10000.0
+Payments:,2500.0
+Closing Balance:,7500.0,Debit
+
+Date,Reference,Type,Narration,Debit,Credit,Running Balance,Dr/Cr
+01-07-2026,,Receipt,cash sale invoice INV001,"10,000.00",0.00,"10,000.00",Debit
+05-07-2026,,Payment,cash purchase,0.00,"2,500.00","7,500.00",Debit

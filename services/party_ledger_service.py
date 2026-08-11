@@ -71,6 +71,40 @@ class PartyLedgerService:
     @staticmethod
     def _get_party_accounts(company_id: int, party_type: str) -> List[Dict[str, Any]]:
         try:
+            # Prefer the Expenzo `accounts` table; fall back to the legacy
+            # personal `parties` table only when accounts is unavailable.
+            accounts_columns = PartyLedgerService._table_columns('accounts')
+            if accounts_columns:
+                rows = db.fetch_all(
+                    """
+                    SELECT id, company_id, name, code, account_group,
+                           opening_balance, opening_balance_type, is_active
+                    FROM accounts
+                    WHERE company_id = ? AND is_active = 1
+                    ORDER BY name
+                    """,
+                    (company_id,),
+                )
+                accounts: List[Dict[str, Any]] = []
+                for row in rows:
+                    group = PartyLedgerService._row_value(row, 'account_group', '')
+                    if party_type == PartyLedgerService.PARTY_TYPE_DEBTOR and group not in PartyLedgerService.DEBTOR_GROUPS:
+                        continue
+                    if party_type == PartyLedgerService.PARTY_TYPE_CREDITOR and group not in PartyLedgerService.CREDITOR_GROUPS:
+                        continue
+                    accounts.append({
+                        'id': PartyLedgerService._row_value(row, 'id'),
+                        'company_id': PartyLedgerService._row_value(row, 'company_id', company_id),
+                        'name': PartyLedgerService._row_value(row, 'name', ''),
+                        'code': PartyLedgerService._row_value(row, 'code', ''),
+                        'account_group': group,
+                        'opening_balance': float(PartyLedgerService._row_value(row, 'opening_balance', 0.0) or 0.0),
+                        'opening_balance_type': PartyLedgerService._row_value(row, 'opening_balance_type', 'Debit'),
+                        'is_active': bool(PartyLedgerService._row_value(row, 'is_active', 1)),
+                    })
+                if accounts:
+                    return accounts
+
             columns = PartyLedgerService._table_columns('parties')
             if not columns:
                 return []
@@ -114,7 +148,7 @@ class PartyLedgerService:
             """
             rows = db.fetch_all(query, tuple(params))
 
-            accounts: List[Dict[str, Any]] = []
+            accounts = []
             for row in rows:
                 accounts.append({
                     'id': PartyLedgerService._row_value(row, id_col, PartyLedgerService._row_value(row, 'id')),
@@ -132,8 +166,27 @@ class PartyLedgerService:
             return []
 
     @staticmethod
+    def _parse_date(value: Any) -> date:
+        """Tolerant date parser supporting both ISO and DD-MM-YYYY formats."""
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
+                try:
+                    return datetime.strptime(value, fmt).date()
+                except ValueError:
+                    continue
+        return date(1900, 1, 1)
+
+    @staticmethod
     def _get_party_transactions(account_id: int, from_date: date, to_date: date) -> List[Dict[str, Any]]:
         try:
+            expenzo_rows = PartyLedgerService._get_expenzo_transactions(account_id, from_date, to_date)
+            if expenzo_rows:
+                return expenzo_rows
+            # Expenzo vouchers exist but have no rows for this account; fall
+            # through to the legacy personal schema (parties/transactions).
+
             columns = PartyLedgerService._table_columns('transactions')
             if not columns:
                 return []
@@ -142,36 +195,57 @@ class PartyLedgerService:
             date_col = PartyLedgerService._pick_column(columns, ['transaction_date', 'date', 'txn_date', 'entry_date'])
             ref_col = PartyLedgerService._pick_column(columns, ['reference_number', 'reference', 'ref_no', 'voucher_number'])
             type_col = PartyLedgerService._pick_column(columns, ['transaction_type', 'type', 'voucher_type', 'entry_type'])
-            narration_col = PartyLedgerService._pick_column(columns, ['narration', 'description', 'remarks', 'note'])
+            narration_col = PartyLedgerService._pick_column(columns, ['narration', 'description', 'remarks', 'note', 'notes'])
             due_date_col = PartyLedgerService._pick_column(columns, ['due_date', 'payment_due_date'])
             debit_col = PartyLedgerService._pick_column(columns, ['debit_amount', 'debit'])
             credit_col = PartyLedgerService._pick_column(columns, ['credit_amount', 'credit'])
+            amount_col = PartyLedgerService._pick_column(columns, ['amount', 'transaction_amount', 'net_amount'])
             status_col = PartyLedgerService._pick_column(columns, ['status', 'is_posted', 'posted'])
             id_col = PartyLedgerService._pick_column(columns, ['id'])
 
             if not party_col or not date_col:
                 return []
 
-            select_columns = [c for c in [id_col, party_col, date_col, ref_col, type_col, narration_col, due_date_col, debit_col, credit_col, status_col] if c]
+            select_columns = [
+                c for c in [
+                    id_col, party_col, date_col, ref_col, type_col, narration_col,
+                    due_date_col, debit_col, credit_col, amount_col, status_col
+                ] if c
+            ]
             query = f"""
                 SELECT {', '.join(select_columns)}
                 FROM transactions
                 WHERE {party_col} = ?
-                  AND {date_col} BETWEEN ? AND ?
                 ORDER BY {date_col}, {id_col or date_col}
             """
-            rows = db.fetch_all(query, (account_id, from_date.isoformat(), to_date.isoformat()))
+            rows = db.fetch_all(query, (account_id,))
 
             transactions: List[Dict[str, Any]] = []
             for row in rows:
                 txn_date_value = PartyLedgerService._row_value(row, date_col)
+                txn_date = PartyLedgerService._parse_date(txn_date_value)
+                if txn_date < from_date or txn_date > to_date:
+                    continue
                 debit_value = float(PartyLedgerService._row_value(row, debit_col, 0.0) or 0.0) if debit_col else 0.0
                 credit_value = float(PartyLedgerService._row_value(row, credit_col, 0.0) or 0.0) if credit_col else 0.0
                 if debit_col is None and credit_col is None:
-                    amount = float(PartyLedgerService._row_value(row, 'amount', 0.0) or 0.0)
-                    direction = str(PartyLedgerService._row_value(row, 'direction', 'debit')).lower()
-                    debit_value = amount if direction in ('debit', 'dr', 'in') else 0.0
-                    credit_value = amount if direction in ('credit', 'cr', 'out') else 0.0
+                    amount = float(PartyLedgerService._row_value(row, amount_col, 0.0) or 0.0) if amount_col else 0.0
+                    direction = str(PartyLedgerService._row_value(row, 'direction', '')).lower()
+                    txn_type = str(PartyLedgerService._row_value(row, type_col, '')).lower()
+                    if direction in ('credit', 'cr', 'out', 'payment'):
+                        credit_value = amount
+                        debit_value = 0.0
+                    elif direction in ('debit', 'dr', 'in'):
+                        debit_value = amount
+                        credit_value = 0.0
+                    elif txn_type == 'expense':
+                        # Personal schema: an Expense is money out (credit).
+                        credit_value = amount
+                        debit_value = 0.0
+                    else:
+                        # Personal schema default: Income is money in (debit).
+                        debit_value = amount
+                        credit_value = 0.0
 
                 transactions.append({
                     'voucher_id': PartyLedgerService._row_value(row, id_col, None) if id_col else None,
@@ -195,14 +269,90 @@ class PartyLedgerService:
             return []
 
     @staticmethod
+    def _get_expenzo_transactions(account_id: int, from_date: date, to_date: date) -> Optional[List[Dict[str, Any]]]:
+        """Read party transactions from the Expenzo voucher schema.
+
+        Returns None when the voucher tables are unavailable so callers fall
+        back to the legacy personal ``transactions`` table.
+        """
+        try:
+            voucher_columns = PartyLedgerService._table_columns('vouchers')
+            detail_columns = PartyLedgerService._table_columns('voucher_details')
+            if not voucher_columns or not detail_columns:
+                return None
+
+            rows = db.fetch_all(
+                """
+                SELECT
+                    v.id AS voucher_id,
+                    v.voucher_number,
+                    v.voucher_type,
+                    v.voucher_date,
+                    v.reference_number,
+                    v.narration,
+                    v.due_date,
+                    v.status,
+                    vd.id AS detail_id,
+                    vd.debit_amount,
+                    vd.credit_amount,
+                    vd.narration AS detail_narration,
+                    vd.account_id,
+                    vd.contra_account_id
+                FROM voucher_details vd
+                JOIN vouchers v ON v.id = vd.voucher_id
+                WHERE vd.account_id = ? AND v.status != 'Cancelled'
+                ORDER BY v.voucher_date, v.id, vd.id
+                """,
+                (account_id,),
+            )
+
+            transactions: List[Dict[str, Any]] = []
+            for row in rows:
+                txn_date_value = PartyLedgerService._row_value(row, 'voucher_date')
+                txn_date = PartyLedgerService._parse_date(txn_date_value)
+                if txn_date < from_date or txn_date > to_date:
+                    continue
+                due_date = PartyLedgerService._row_value(row, 'due_date', None)
+                if hasattr(due_date, 'isoformat'):
+                    due_date = due_date.isoformat()
+                transactions.append({
+                    'voucher_id': PartyLedgerService._row_value(row, 'voucher_id'),
+                    'voucher_number': PartyLedgerService._row_value(row, 'voucher_number', ''),
+                    'voucher_type': PartyLedgerService._row_value(row, 'voucher_type', ''),
+                    'voucher_date': txn_date_value,
+                    'reference_number': PartyLedgerService._row_value(row, 'reference_number', ''),
+                    'narration': PartyLedgerService._row_value(row, 'narration', ''),
+                    'detail_id': PartyLedgerService._row_value(row, 'detail_id'),
+                    'debit_amount': float(PartyLedgerService._row_value(row, 'debit_amount', 0.0) or 0.0),
+                    'credit_amount': float(PartyLedgerService._row_value(row, 'credit_amount', 0.0) or 0.0),
+                    'detail_narration': PartyLedgerService._row_value(row, 'detail_narration', ''),
+                    'contra_account_name': '',
+                    'contra_account_group': '',
+                    'due_date': due_date,
+                    'status': PartyLedgerService._row_value(row, 'status', ''),
+                })
+            return transactions
+        except Exception as e:
+            logger.error(f"Error getting expenzo transactions: {e}")
+            return None
+
+    @staticmethod
     def _calculate_opening_balance(account: Dict[str, Any], from_date: date) -> Tuple[float, str]:
         try:
             opening_balance = float(account.get('opening_balance', 0.0) or 0.0)
             opening_type = account.get('opening_balance_type', 'Debit')
 
             transactions = PartyLedgerService._get_party_transactions(account['id'], date(1900, 1, 1), from_date)
-            total_debit = sum(float(txn.get('debit_amount', 0.0) or 0.0) for txn in transactions if txn.get('voucher_date') and txn['voucher_date'] < from_date.isoformat())
-            total_credit = sum(float(txn.get('credit_amount', 0.0) or 0.0) for txn in transactions if txn.get('voucher_date') and txn['voucher_date'] < from_date.isoformat())
+            total_debit = sum(
+                float(txn.get('debit_amount', 0.0) or 0.0)
+                for txn in transactions
+                if PartyLedgerService._parse_date(txn.get('voucher_date')) < from_date
+            )
+            total_credit = sum(
+                float(txn.get('credit_amount', 0.0) or 0.0)
+                for txn in transactions
+                if PartyLedgerService._parse_date(txn.get('voucher_date')) < from_date
+            )
 
             if opening_type == 'Debit':
                 net_balance = opening_balance + total_debit - total_credit

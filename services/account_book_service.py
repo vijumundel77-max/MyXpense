@@ -40,6 +40,10 @@ class AccountBookService:
 
     @staticmethod
     def _get_transactions(from_date: date, to_date: date, account_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        # Read through the party-ledger reader so both the Expenzo voucher
+        # schema and the legacy personal schema are supported.
+        if account_id is not None:
+            return PartyLedgerService._get_party_transactions(account_id, from_date, to_date)
         return CashBookService._get_transactions(from_date, to_date, account_id)
 
     @staticmethod

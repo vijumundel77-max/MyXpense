@@ -1,0 +1,12 @@
+Party Ledger
+Account:,Customer A
+Code:,CUST001
+Period:,2026-07-01 to 2026-07-31
+
+Opening Balance:,"1,000.00 Debit"
+
+Date,Voucher No.,Type,Reference,Particulars,Debit,Credit,Balance,Dr/Cr
+01-07-2026,,Income,,,"10,000.00",0.00,"11,000.00",Debit
+
+Total,,,,,"10,000.00",0.00,,
+Closing Balance:,"11,000.00 Debit"

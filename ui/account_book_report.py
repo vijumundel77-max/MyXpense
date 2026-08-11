@@ -1,200 +1,186 @@
 """
-Account Book Report UI
-Tkinter-based UI for Account Book report.
+Expenzo — Account Book Report
+Account statement view from Expenzo voucher data.
 """
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
 from datetime import date, datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+import customtkinter as ctk
 
 import config
 from services.account_book_service import account_book_service
+from services.account_service import account_service
+from ui.report_base import (
+    ReportHeader,
+    FilterBar,
+    ReportTable,
+    ReportStatusBar,
+    make_date_entry,
+    make_readonly_combo,
+    make_button,
+)
+from utils import dialogs
 
 
 class AccountBookReportUI:
-    """UI for Account Book report."""
+    """Account Book report screen (Expenzo voucher data)."""
 
     def __init__(self, parent: tk.Widget, company_id: int):
         self.parent = parent
         self.company_id = company_id
         self.current_report_data: Optional[Dict[str, Any]] = None
+        self.account_map: Dict[str, int] = {}
 
-        self.main_frame = ttk.Frame(parent)
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.main_frame = ctk.CTkFrame(parent, corner_radius=0, fg_color="transparent")
+        self.main_frame.pack(fill="both", expand=True, padx=config.SPACING_XL, pady=config.SPACING_XL)
 
-        self._create_header()
-        self._create_filters()
-        self._create_report_area()
-        self._create_status_bar()
+        ReportHeader(self.main_frame, "Account Book", "Account statement view")
+
+        filters = FilterBar(self.main_frame)
+        self.account_var = tk.StringVar(value="All Accounts")
+        self.from_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
+        self.to_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
+        self.search_var = tk.StringVar()
+
+        self.account_combo = make_readonly_combo(filters.body, ["All Accounts"], self.account_var, 220)
+        filters.add("Account", self.account_combo)
+        filters.add("From Date", make_date_entry(filters.body, self.from_date_var))
+        filters.add("To Date", make_date_entry(filters.body, self.to_date_var))
+        self.search_entry = ctk.CTkEntry(filters.body, textvariable=self.search_var, width=170,
+                                         corner_radius=config.INPUT_CORNER_RADIUS)
+        filters.add("Search", self.search_entry)
+        make_button(filters.body, "Generate", self._generate_report, accent=True).pack(
+            side="left", padx=(0, config.SPACING_SM))
+        make_button(filters.body, "Export CSV", self._export_to_csv).pack(
+            side="left", padx=(0, config.SPACING_SM))
+        make_button(filters.body, "Export JSON", self._export_to_json).pack(
+            side="left", padx=(0, config.SPACING_SM))
+        make_button(filters.body, "Export PNG", self._export_to_png, width=100).pack(side="left")
+
+        columns = [
+            {"id": "date", "heading": "Date", "width": 100},
+            {"id": "reference", "heading": "Reference", "width": 130},
+            {"id": "type", "heading": "Type", "width": 100},
+            {"id": "narration", "heading": "Narration", "width": 240},
+            {"id": "debit", "heading": "Debit", "width": 110, "anchor": "e"},
+            {"id": "credit", "heading": "Credit", "width": 110, "anchor": "e"},
+            {"id": "balance", "heading": "Running Balance", "width": 130, "anchor": "e"},
+            {"id": "dr_cr", "heading": "Dr/Cr", "width": 60, "anchor": "center"},
+        ]
+        self.table = ReportTable(self.main_frame, columns)
+        self.table.show_empty("Select an account and generate to begin.")
+
+        self.status = ReportStatusBar(self.main_frame)
         self._load_accounts()
 
-    def _create_header(self) -> None:
-        header = ttk.Frame(self.main_frame)
-        header.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(header, text="Account Book Report", font=("Arial", 16, "bold")).pack(side=tk.LEFT)
-
-    def _create_filters(self) -> None:
-        filter_frame = ttk.LabelFrame(self.main_frame, text="Filters", padding=10)
-        filter_frame.pack(fill=tk.X, pady=(0, 10))
-
-        row = ttk.Frame(filter_frame)
-        row.pack(fill=tk.X)
-
-        ttk.Label(row, text="Account:", width=12).pack(side=tk.LEFT)
-        self.account_var = tk.StringVar(value="All")
-        self.account_combo = ttk.Combobox(row, textvariable=self.account_var, state="readonly", width=24)
-        self.account_combo.pack(side=tk.LEFT, padx=(0, 20))
-
-        ttk.Label(row, text="From Date:", width=12).pack(side=tk.LEFT)
-        self.from_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
-        ttk.Entry(row, textvariable=self.from_date_var, width=15).pack(side=tk.LEFT, padx=(0, 20))
-
-        ttk.Label(row, text="To Date:", width=10).pack(side=tk.LEFT)
-        self.to_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
-        ttk.Entry(row, textvariable=self.to_date_var, width=15).pack(side=tk.LEFT, padx=(0, 20))
-
-        ttk.Label(row, text="Search:", width=8).pack(side=tk.LEFT)
-        self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", self._on_search_changed)
-        ttk.Entry(row, textvariable=self.search_var, width=24).pack(side=tk.LEFT, padx=(0, 20))
-
-        ttk.Button(row, text="Generate", command=self._generate_report).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(row, text="Export CSV", command=self._export_to_csv).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(row, text="Export JSON", command=self._export_to_json).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(row, text="Refresh", command=self._refresh).pack(side=tk.LEFT)
-
-    def _create_report_area(self) -> None:
-        self.report_frame = ttk.Frame(self.main_frame)
-        self.report_frame.pack(fill=tk.BOTH, expand=True)
-
-        self.summary_label = ttk.Label(self.report_frame, text="Generate an account book report to begin.")
-        self.summary_label.pack(anchor="w", pady=(0, 5))
-
-        tree_frame = ttk.Frame(self.report_frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
-
-        vsb = ttk.Scrollbar(tree_frame, orient="vertical")
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        hsb = ttk.Scrollbar(tree_frame, orient="horizontal")
-        hsb.pack(side=tk.BOTTOM, fill=tk.X)
-
-        columns = ("date", "reference", "type", "narration", "debit", "credit", "running_balance", "dr_cr")
-        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        vsb.config(command=self.tree.yview)
-        hsb.config(command=self.tree.xview)
-        for col, heading, width in [
-            ("date", "Date", 100),
-            ("reference", "Reference", 120),
-            ("type", "Type", 120),
-            ("narration", "Narration", 260),
-            ("debit", "Debit", 120),
-            ("credit", "Credit", 120),
-            ("running_balance", "Running Balance", 140),
-            ("dr_cr", "Dr/Cr", 60),
-        ]:
-            self.tree.heading(col, text=heading)
-            self.tree.column(col, width=width, anchor="e" if col in {"debit", "credit", "running_balance"} else "w")
-        self.tree.pack(fill=tk.BOTH, expand=True)
-
-    def _create_status_bar(self) -> None:
-        self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(self.main_frame, textvariable=self.status_var, relief=tk.SUNKEN, anchor="w").pack(fill=tk.X, pady=(8, 0))
-
-    def _set_status(self, text: str) -> None:
-        self.status_var.set(text)
-        self.parent.update_idletasks()
-
-    def _parse_date(self, value: str) -> date:
-        return datetime.strptime(value, config.DISPLAY_DATE_FORMAT).date()
-
     def _load_accounts(self) -> None:
-        party_items = account_book_service._get_party_items(self.company_id)
-        values = ["All"] + [f"{item.get('id')} - {item.get('name', '')}" for item in party_items]
-        self.account_combo["values"] = values
-        self.account_combo.current(0)
+        accounts = account_service.search_accounts(self.company_id, include_inactive=False)
+        self.account_map = {
+            f"{a['name']} ({a['code']})" if a.get('code') else a['name']: a['id']
+            for a in accounts
+        }
+        self.account_combo.configure(values=["All Accounts"] + list(self.account_map.keys()))
+
+    def _parse_date(self, raw: str) -> Optional[date]:
+        try:
+            return datetime.strptime(raw.strip(), config.DISPLAY_DATE_FORMAT).date()
+        except ValueError:
+            return None
 
     def _selected_account_id(self) -> Optional[int]:
         value = self.account_var.get().strip()
-        if not value or value == "All":
+        if value == "All Accounts":
             return None
-        return int(value.split(" - ", 1)[0])
+        return self.account_map.get(value)
 
     def _generate_report(self) -> None:
-        try:
-            from_date = self._parse_date(self.from_date_var.get())
-            to_date = self._parse_date(self.to_date_var.get())
-            account_id = self._selected_account_id()
-            self._set_status("Generating account book...")
-            report = account_book_service.generate_account_book(self.company_id, account_id or 0, from_date, to_date)
-            if not report.get("success"):
-                messagebox.showerror("Error", report.get("error", "Failed to generate report"))
-                return
-            self.current_report_data = report
-            self._render_report(report)
-            self._set_status(f"Account book generated: {report['transaction_count']} transactions")
-        except Exception as exc:
-            messagebox.showerror("Error", f"Invalid date or report error: {exc}")
-            self._set_status("Report generation failed")
+        from_date = self._parse_date(self.from_date_var.get())
+        to_date = self._parse_date(self.to_date_var.get())
+        if not from_date or not to_date:
+            dialogs.warn("Account Book", "Invalid date. Use DD-MM-YYYY format.", parent=self.parent)
+            return
+        if from_date > to_date:
+            dialogs.warn("Account Book", "From Date cannot be after To Date.", parent=self.parent)
+            return
+        account_id = self._selected_account_id()
+        if not account_id:
+            dialogs.warn("Account Book", "Select a specific account for the statement.", parent=self.parent)
+            return
+        report = account_book_service.generate_account_book(
+            self.company_id, account_id, from_date, to_date)
+        if not report.get('success'):
+            dialogs.error("Account Book", report.get('error', 'Failed to generate report'), parent=self.parent)
+            return
+        self.current_report_data = report
+        self._render(report)
 
-    def _render_report(self, report: Dict[str, Any]) -> None:
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        self.summary_label.config(
-            text=(
-                f"Opening: {report['opening_balance']['amount']:,.2f} {report['opening_balance']['type']} | "
-                f"Receipts: {report['receipts']:,.2f} | "
-                f"Payments: {report['payments']:,.2f} | "
-                f"Closing: {report['closing_balance']['amount']:,.2f} {report['closing_balance']['type']}"
-            )
-        )
-        for txn in report.get("transactions", []):
-            self.tree.insert("", tk.END, values=(
-                txn.get("transaction_date", ""),
-                txn.get("reference_number", ""),
-                txn.get("transaction_type", ""),
-                txn.get("narration", ""),
+    def _render(self, report: Dict[str, Any]) -> None:
+        self.table.hide_empty()
+        search = self.search_var.get().strip().lower()
+        rows = []
+        for txn in report.get('transactions', []):
+            if search and not any(
+                search in str(txn.get(field, '')).lower()
+                for field in ('reference_number', 'narration', 'transaction_type')
+            ):
+                continue
+            rows.append((
+                txn.get('transaction_date', ''),
+                txn.get('reference_number', ''),
+                txn.get('transaction_type', ''),
+                txn.get('narration', ''),
                 f"{txn.get('debit_amount', 0):,.2f}",
                 f"{txn.get('credit_amount', 0):,.2f}",
                 f"{txn.get('running_balance', 0):,.2f}",
-                txn.get("balance_type", ""),
+                txn.get('balance_type', ''),
             ))
+        self.table.set_rows(rows)
+        opening = report.get('opening_balance', {})
+        closing = report.get('closing_balance', {})
+        self.table.set_totals(
+            f"Opening: {opening.get('amount', 0):,.2f} {opening.get('type', '')}   |   "
+            f"Receipts: {report.get('receipts', 0):,.2f}   |   "
+            f"Payments: {report.get('payments', 0):,.2f}   |   "
+            f"Closing: {closing.get('amount', 0):,.2f} {closing.get('type', '')}"
+        )
+        self.status.set(
+            f"Account book generated: {report.get('transaction_count', 0)} transactions "
+            f"({report.get('from_date', '')} to {report.get('to_date', '')})"
+        )
 
-    def _on_search_changed(self, *args) -> None:
+    def _export_to_png(self) -> None:
         if not self.current_report_data:
+            dialogs.warn("Export", "Generate the report first.", parent=self.parent)
             return
-        filtered = account_book_service.search_transactions(self.current_report_data, self.search_var.get())
-        self._render_report(filtered)
+        from utils.report_exporter import report_exporter
+        success, path = report_exporter.export_table_to_png(self.table, "account_book")
+        if success:
+            dialogs.info("Export", f"Exported to:\n{path}", parent=self.parent)
+        else:
+            dialogs.warn("Export", path, parent=self.parent)
 
     def _export_to_csv(self) -> None:
         if not self.current_report_data:
-            messagebox.showwarning("Warning", "Generate a report first")
+            dialogs.warn("Export", "Generate the report first.", parent=self.parent)
             return
-        success, result = account_book_service.export_account_book_to_csv(self.current_report_data)
+        success, path = account_book_service.export_account_book_to_csv(self.current_report_data)
         if success:
-            messagebox.showinfo("Success", f"Exported to {result}")
+            dialogs.info("Export", f"Exported to:\n{path}", parent=self.parent)
         else:
-            messagebox.showerror("Error", result)
+            dialogs.error("Export", path, parent=self.parent)
 
     def _export_to_json(self) -> None:
         if not self.current_report_data:
-            messagebox.showwarning("Warning", "Generate a report first")
+            dialogs.warn("Export", "Generate the report first.", parent=self.parent)
             return
-        success, result = account_book_service.export_to_json(self.current_report_data, "account_book")
+        success, path = account_book_service.export_to_json(self.current_report_data, "account_book")
         if success:
-            messagebox.showinfo("Success", f"Exported to {result}")
+            dialogs.info("Export", f"Exported to:\n{path}", parent=self.parent)
         else:
-            messagebox.showerror("Error", result)
-
-    def _refresh(self) -> None:
-        self.current_report_data = None
-        self.search_var.set("")
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        self.summary_label.config(text="Generate an account book report to begin.")
-        self._set_status("Refreshed")
-        self._load_accounts()
+            dialogs.error("Export", path, parent=self.parent)
 
 
 def show_account_book_report(parent: tk.Widget, company_id: int) -> AccountBookReportUI:

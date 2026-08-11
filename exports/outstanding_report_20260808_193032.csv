@@ -1,0 +1,10 @@
+Outstanding Report
+Type:,Receivable
+As On Date:,2026-07-31
+
+Code,Name,Outstanding,Type,Invoices
+CUST001,Customer A,"11,000.00",Debit,1
+
+Total Receivable:,"11,000.00"
+Total Payable:,0.00
+Total Outstanding:,"11,000.00"

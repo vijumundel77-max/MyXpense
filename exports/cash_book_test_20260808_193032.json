@@ -1,0 +1,57 @@
+{
+  "success": true,
+  "report_type": "Cash Book",
+  "company_id": 1,
+  "account_id": null,
+  "from_date": "2026-07-01",
+  "to_date": "2026-07-31",
+  "opening_balance": 0.0,
+  "receipts": 10000.0,
+  "payments": 2500.0,
+  "transactions": [
+    {
+      "id": 1,
+      "transaction_date": "01-07-2026",
+      "party_id": 1,
+      "category_id": 1,
+      "transfer_id": null,
+      "reference_number": "",
+      "narration": "cash sale invoice INV001",
+      "debit_amount": 10000.0,
+      "credit_amount": 0.0,
+      "amount": 10000.0,
+      "account_id": 1,
+      "status": "",
+      "account_mode": "Bank",
+      "payment_method": "Bank",
+      "transaction_type": "Receipt",
+      "running_balance": 10000.0,
+      "balance_type": "Debit"
+    },
+    {
+      "id": 2,
+      "transaction_date": "05-07-2026",
+      "party_id": null,
+      "category_id": 5,
+      "transfer_id": null,
+      "reference_number": "",
+      "narration": "cash purchase",
+      "debit_amount": 0.0,
+      "credit_amount": 2500.0,
+      "amount": 2500.0,
+      "account_id": null,
+      "status": "",
+      "account_mode": "Cash",
+      "payment_method": "Cash",
+      "transaction_type": "Payment",
+      "running_balance": 7500.0,
+      "balance_type": "Debit"
+    }
+  ],
+  "closing_balance": {
+    "amount": 7500.0,
+    "type": "Debit"
+  },
+  "transaction_count": 2,
+  "generated_at": "2026-08-08T19:30:32.726396"
+}

@@ -56,9 +56,9 @@ class OutstandingReportService:
         return PartyLedgerService._get_party_accounts(company_id, party_type)
 
     @staticmethod
-    def _calculate_outstanding_balance(account_id: int, as_on_date: date) -> Tuple[float, str]:
+    def _calculate_outstanding_balance(account_id: int, as_on_date: date, company_id: int = 1) -> Tuple[float, str]:
         try:
-            account = next((item for item in PartyLedgerService._get_party_accounts(0, PartyLedgerService.PARTY_TYPE_ALL) if item['id'] == account_id), None)
+            account = next((item for item in PartyLedgerService._get_party_accounts(company_id, PartyLedgerService.PARTY_TYPE_ALL) if item['id'] == account_id), None)
             if not account:
                 columns = PartyLedgerService._table_columns('parties')
                 id_col = PartyLedgerService._pick_column(columns, ['id'])
@@ -87,14 +87,18 @@ class OutstandingReportService:
     @staticmethod
     def _get_outstanding_invoices(account_id: int, as_on_date: date) -> List[Dict[str, Any]]:
         try:
+            from services.ageing_report_service import AgeingReportService
+
             transactions = PartyLedgerService._get_party_transactions(account_id, date(1900, 1, 1), as_on_date)
             invoices: List[Dict[str, Any]] = []
+            payments: List[Dict[str, Any]] = []
+            total_debit = 0.0
+            total_credit = 0.0
             for txn in transactions:
                 debit_amount = float(txn.get('debit_amount', 0.0) or 0.0)
                 credit_amount = float(txn.get('credit_amount', 0.0) or 0.0)
-                invoice_amount = debit_amount - credit_amount
-                if abs(invoice_amount) <= 0.01:
-                    continue
+                total_debit += debit_amount
+                total_credit += credit_amount
 
                 voucher_date = txn.get('voucher_date')
                 if hasattr(voucher_date, 'isoformat'):
@@ -102,19 +106,36 @@ class OutstandingReportService:
                 due_date = txn.get('due_date')
                 if hasattr(due_date, 'isoformat'):
                     due_date = due_date.isoformat()
+                voucher_date = PartyLedgerService._parse_date(voucher_date)
+                due_date = PartyLedgerService._parse_date(due_date) if due_date else None
 
-                invoices.append({
+                entry = {
                     'voucher_id': txn.get('voucher_id'),
                     'voucher_number': txn.get('voucher_number', ''),
                     'voucher_type': txn.get('voucher_type', ''),
                     'voucher_date': voucher_date,
                     'reference_number': txn.get('reference_number', ''),
                     'due_date': due_date,
-                    'invoice_amount': abs(invoice_amount),
-                    'outstanding_amount': abs(invoice_amount),
-                    'is_debit': invoice_amount > 0,
-                })
-            return invoices
+                    'net_amount': debit_amount - credit_amount,
+                    'is_debit': debit_amount > credit_amount,
+                }
+                # For debtors (net debit) the invoice side is debit; for
+                # creditors (net credit) the invoice side is credit.
+                if total_debit >= total_credit:
+                    if debit_amount > credit_amount:
+                        invoices.append(entry)
+                    elif credit_amount > debit_amount:
+                        payments.append(entry)
+                else:
+                    if credit_amount > debit_amount:
+                        invoices.append(entry)
+                    elif debit_amount > credit_amount:
+                        payments.append(entry)
+
+            netted = AgeingReportService._allocate_payments_fifo_shared(invoices, payments)
+            for inv in netted:
+                inv['invoice_amount'] = inv['outstanding_amount']
+            return netted
         except Exception as e:
             logger.error(f"Error getting outstanding invoices: {e}")
             return []
@@ -166,7 +187,7 @@ class OutstandingReportService:
                 transactions = PartyLedgerService._get_party_transactions(account['id'], date(1900, 1, 1), as_on_date)
                 outstanding_balance, balance_type = PartyLedgerService._calculate_closing_balance(opening_balance, opening_type, transactions)
 
-                if not include_zero_balance and outstanding_balance < 0.01:
+                if not include_zero_balance and abs(outstanding_balance) < 0.01:
                     continue
 
                 invoices = OutstandingReportService._get_outstanding_invoices(account['id'], as_on_date)

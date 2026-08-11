@@ -1,0 +1,16 @@
+Party Summary
+Party Type:,All
+As On Date:,2026-08-09
+
+Code,Name,Group,Opening,Type,Debit,Credit,Closing,Type,Transactions
+CASH001,Cash,Cash,"10,000.00",Debit,0.00,0.00,"10,000.00",Debit,0
+CUST001,Customer A,Sundry Debtors,"1,000.00",Debit,0.00,0.00,"1,000.00",Debit,0
+PUR001,Purchases,Purchases,0.00,Debit,0.00,0.00,0.00,Debit,0
+SAL001,Sales,Sales,0.00,Debit,0.00,0.00,0.00,Debit,0
+SUPP001,Supplier B,Sundry Creditors,500.00,Debit,0.00,0.00,500.00,Debit,0
+
+Totals
+Total Debit:,0.00
+Total Credit:,0.00
+Net Receivable:,"11,500.00"
+Net Payable:,0.00

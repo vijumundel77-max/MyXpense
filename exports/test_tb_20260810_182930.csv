@@ -1,0 +1,14 @@
+Trial Balance
+As On Date:,2026-08-31
+
+Code,Account,Group,Debit,Credit
+BANK,Bank,Bank Accounts,"20,000.00",0.00
+CAP,Capital,Capital,0.00,"30,000.00"
+CASH,Cash,Cash-in-Hand,"8,000.00",0.00
+C001,Customer A,Sundry Debtors,"5,000.00",0.00
+PUR,Purchases,Purchase Accounts,"2,800.00",0.00
+SAL,Sales,Sales Accounts,0.00,"5,000.00"
+S001,Supplier X,Sundry Creditors,0.00,800.00
+
+,TOTAL,,"35,800.00","35,800.00"
+Balanced:,Yes

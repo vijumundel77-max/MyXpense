@@ -124,6 +124,15 @@ class AgeingReportService:
             return invoices
 
     @staticmethod
+    def _allocate_payments_fifo_shared(invoices: List[Dict[str, Any]], payments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Shared FIFO allocation used by outstanding/ageing reports.
+
+        Each invoice dict must carry ``voucher_date`` and ``net_amount``; the
+        helper sets ``outstanding_amount`` on the surviving invoices.
+        """
+        return AgeingReportService._allocate_payments_fifo(invoices, payments)
+
+    @staticmethod
     def generate_ageing_report(company_id: int, ageing_type: str, as_on_date: date, custom_buckets: Optional[List[Tuple[int, int, str]]] = None) -> Dict[str, Any]:
         try:
             buckets = custom_buckets if custom_buckets else AgeingReportService.DEFAULT_BUCKETS
@@ -137,13 +146,10 @@ class AgeingReportService:
             grand_total = 0.0
 
             for party in outstanding_report.get('parties', []):
-                invoices = party.get('invoices', [])
-                if not invoices:
-                    continue
-                outstanding_invoices = AgeingReportService._allocate_payments_fifo(
-                    [inv for inv in invoices if inv.get('is_debit', False)],
-                    [inv for inv in invoices if not inv.get('is_debit', False)],
-                )
+                # The outstanding report has already netted payments against
+                # invoices via FIFO (see _get_outstanding_invoices), so the
+                # surviving invoices here are the outstanding ones.
+                outstanding_invoices = party.get('invoices', [])
                 if not outstanding_invoices:
                     continue
 

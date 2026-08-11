@@ -1,0 +1,57 @@
+{
+  "success": true,
+  "report_type": "Ageing Report",
+  "ageing_type": "Receivable",
+  "as_on_date": "2026-07-31",
+  "buckets": [
+    "0-30 days",
+    "31-60 days",
+    "61-90 days",
+    "91-180 days",
+    "Above 180 days"
+  ],
+  "parties": [
+    {
+      "account_id": 1,
+      "account_name": "Customer A",
+      "account_code": "CUST001",
+      "account_group": "Sundry Debtors",
+      "buckets": {
+        "0-30 days": 10000.0,
+        "31-60 days": 0.0,
+        "61-90 days": 0.0,
+        "91-180 days": 0.0,
+        "Above 180 days": 0.0
+      },
+      "total": 10000.0,
+      "invoices": [
+        {
+          "voucher_id": 1,
+          "voucher_number": "",
+          "voucher_type": "Income",
+          "voucher_date": "2026-07-01",
+          "reference_number": "",
+          "due_date": null,
+          "net_amount": 10000.0,
+          "is_debit": true,
+          "outstanding_amount": 10000.0,
+          "invoice_amount": 10000.0,
+          "ageing_days": 30,
+          "ageing_category": "0-30 days",
+          "ageing_bucket": "0-30 days"
+        }
+      ],
+      "invoice_count": 1
+    }
+  ],
+  "totals": {
+    "0-30 days": 10000.0,
+    "31-60 days": 0.0,
+    "61-90 days": 0.0,
+    "91-180 days": 0.0,
+    "Above 180 days": 0.0
+  },
+  "grand_total": 10000.0,
+  "party_count": 1,
+  "generated_at": "2026-08-08T19:30:32.792262"
+}
