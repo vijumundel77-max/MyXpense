@@ -104,16 +104,37 @@ def _find_delete_method(view: Any) -> Optional[Callable[[], Any]]:
     return None
 
 
+def _list_tree(view: Any) -> Optional[Any]:
+    """Return the view's primary Treeview, wherever it lives.
+
+    Master screens (Company/Ledger/Group/Party) keep their list in a
+    ``list`` sub-state with a ``tree``; simple screens expose ``tree`` or a
+    named variant directly.
+    """
+    if view is None:
+        return None
+    list_state = getattr(view, "list", None)
+    if list_state is not None and hasattr(list_state, "tree"):
+        try:
+            return list_state.tree
+        except Exception:
+            pass
+    for attr in ("tree", "voucher_tree", "ledger_tree", "outstanding_tree",
+                 "ageing_tree", "summary_tree", "overdue_tree"):
+        tree = getattr(view, attr, None)
+        if tree is not None:
+            return tree
+    return None
+
+
 def _table_has_selection(view: Any) -> bool:
     """True when the view's primary Treeview has a selected row."""
-    for attr in ("tree", "voucher_tree", "ledger_tree", "outstanding_tree", "ageing_tree",
-                 "summary_tree", "overdue_tree", "account_combo"):
-        tree = getattr(view, attr, None)
-        if tree is not None and hasattr(tree, "selection"):
-            try:
-                return bool(tree.selection())
-            except Exception:
-                pass
+    tree = _list_tree(view)
+    if tree is not None and hasattr(tree, "selection"):
+        try:
+            return bool(tree.selection())
+        except Exception:
+            pass
     return False
 
 
@@ -137,7 +158,14 @@ def install_shortcuts(root: tk.Misc, get_view: Callable[[], Any]) -> None:
         return "break"
 
     def _on_ctrl_f(_event=None) -> str:
-        _focus_search(get_view())
+        view = get_view()
+        # Prefer the view's own search dispatch (screens/hubs forward this to
+        # their active sub-state); fall back to a generic focus helper.
+        search = getattr(view, "on_keyboard_search", None)
+        if callable(search):
+            search()
+            return "break"
+        _focus_search(view)
         return "break"
 
     def _on_f5(_event=None) -> str:
@@ -148,9 +176,17 @@ def install_shortcuts(root: tk.Misc, get_view: Callable[[], Any]) -> None:
 
     def _on_delete(_event=None) -> str:
         view = get_view()
-        if _table_has_selection(view):
-            delete = _find_delete_method(view)
-            if delete:
+        # Prefer the view's own delete dispatch (screens/hubs route this to
+        # their active sub-state, which knows whether a row is selected).
+        delete = _find_delete_method(view)
+        if delete is not None:
+            # Only invoke when a table row is selected (when one is visible);
+            # hubs dispatch further to their child screens.
+            dispatch = getattr(view, "on_keyboard_delete", None)
+            if callable(dispatch):
+                dispatch()
+                return "break"
+            if _table_has_selection(view):
                 delete()
                 return "break"
         return "break"

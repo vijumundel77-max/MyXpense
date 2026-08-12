@@ -63,8 +63,22 @@
 nted — and the active state must update immediately both on theme switch and on navigation. Confidence: 0.75
 
 - Prefers full autonomy on strict implementation tasks: proceed continuously through file inspection, edits, tests, shell commands, real-app launches, and regression fixes without pausing to ask permission/confirmation for safe operations — only stop for operations genuinely destructive/irreversible outside the task scope. Confidence: 0.9
-- For master workflows, the management/list screen and the create/edit form must be separate states/screens within the same module — never cram both into one combined layout; Create and Edit must reuse the same form component, and navigation must not rebuild duplicate widgets/screens on each visit. Confidence: 0.9
+- For master workflows, the management/list screen and the create/edit form must be separate states/screens within the same module — never cram both into one combined layout; Create and Edit must reuse the same form component, and navigation must not rebuild duplicate widgets/screens on each visit. Confidence: 0.95
 - Primary content (the data table/list) must get layout priority over auxiliary info panels and shortcut bars — such panels should be compact and never consume space needed for the actual data. Confidence: 0.7
+- Every important workflow shortcut must also have a visible button/action in the toolbar — never present a shortcut only as text (e.g., "Ctrl+N = New Company") while hiding the actual button. Confidence: 0.85
+- Desktop window layout rules are non-negotiable: fixed header, toolbar, and bottom action/status bar; only the main content/form area scrolls; the UI must never extend outside the window; no widget/button/text may be clipped; layout must resize gracefully using grid/pack weights — never fragile arbitrary fixed heights. Confidence: 0.9
+- Forms and lists must use the available window efficiently: no tiny centered cards, no large unused empty areas, and sensible per-field widths (e.g., Address wider than Pincode) rather than uniform oversized fields; the create/edit form should occupy most of the usable area (~90–95%). Confidence: 0.8
+- List screens should show search directly in the header/toolbar area as a visible box, not hidden behind a button or reachable only via a shortcut. Confidence: 0.7
+- Form validation/success feedback must be truthful and visible: required fields indicated beyond just "*", validation errors shown near the field or in a clear message area, and success messages (✓ saved/updated) shown only when the database operation actually succeeded — never fake success on failure. Confidence: 0.75
+- Master-data delete protection also covers the last remaining record (never allow deleting the last company; at least one must always exist), and destructive deletes must always go through an explicit confirmation dialog. Confidence: 0.75
+- Data tables/lists must be professional desktop-quality: visible rows with proper height and readable typography, clearly highlighted selection plus hover highlight, alternating row treatment, vertical scrolling only when needed (horizontal only when genuinely required), and a "Showing X to Y of Z" summary footer; action buttons enable only when a row is selected. Confidence: 0.7
+
+ng CRUD functionality. Confidence: 0.85
+nted — and the active state must update immediately both on theme switch and on navigation. Confidence: 0.75
+
+, existing useful columns) unless they damage the layout — never silently drop working features during a rewrite. Confidence: 0.75
+- For relational form fields use proper controls populated from existing master data — e.g., a dropdown of Groups for "Under", a Debit/Credit selector for Dr/Cr, a numeric input for Opening Balance — never arbitrary free text when the existing system already has a selector. Confidence: 0.85
+- New master screens must follow the finalized reference master workflow (e.g., the Company Master) as the structural template: the same stateful List/Create/Edit/View architecture, header/toolbar/action-bar patterns, and visual language. Confidence: 0.85
 
 ng CRUD functionality. Confidence: 0.85
 nted — and the active state must update immediately both on theme switch and on navigation. Confidence: 0.75

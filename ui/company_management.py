@@ -6,13 +6,18 @@ Stateful multi-company master workflow:
         Company List
             ├── + New Company (Ctrl+N) → Create Company (separate state)
             ├── Edit (Enter)           → Edit Company (same form state)
-            ├── View                   → View Company (read-only state)
+            ├── View / Open            → View Company (read-only state)
             ├── Delete (Del)           → Delete selected (last-company protected)
+            ├── Search (Ctrl+F)        → filter the list in the header toolbar
+            ├── Refresh (F5)           → reload the list
             └── Esc                    → Masters Hub
-        Create / Edit form
+        Create / Edit form (full-window, separate state)
             ├── Save / Update (Ctrl+S) → back to Company List (refreshed)
+            ├── Save & New             → save, then blank Create form
             ├── Clear                  → reset the form
             └── Cancel / Esc           → back to Company List
+        View (read-only)
+            └── Back / Esc             → Company List
 
 The Company List and the Create/Edit form are SEPARATE UI states — the form is
 never cramped into the list screen.  Company switching stays in Settings; this
@@ -36,26 +41,45 @@ from utils import dialogs
 
 # List columns: (id, heading, width)
 _LIST_COLUMNS: List[Dict[str, Any]] = [
-    {"id": "index", "heading": "#", "width": 34, "anchor": "center"},
-    {"id": "name", "heading": "Company Name", "width": 150, "anchor": "w"},
-    {"id": "code", "heading": "Code", "width": 80, "anchor": "w"},
-    {"id": "email", "heading": "Email", "width": 160, "anchor": "w"},
-    {"id": "phone", "heading": "Phone", "width": 110, "anchor": "w"},
-    {"id": "status", "heading": "Status", "width": 80, "anchor": "center"},
+    {"id": "index", "heading": "#", "width": 40, "anchor": "center", "stretch": False},
+    {"id": "name", "heading": "Company Name", "width": 200, "anchor": "w", "stretch": True},
+    {"id": "code", "heading": "Code", "width": 90, "anchor": "w", "stretch": False},
+    {"id": "email", "heading": "Email", "width": 200, "anchor": "w", "stretch": True},
+    {"id": "phone", "heading": "Phone", "width": 120, "anchor": "w", "stretch": False},
+    {"id": "status", "heading": "Status", "width": 90, "anchor": "center", "stretch": False},
 ]
 
-_FORM_FIELDS: List[Dict[str, Any]] = [
-    {"label": "Company Name *", "var": "name", "width": 320},
-    {"label": "Company Code", "var": "code", "width": 160},
-    {"label": "Email", "var": "email", "width": 300},
-    {"label": "Phone", "var": "mobile", "width": 200},
-    {"label": "Address", "var": "address", "width": 320},
-    {"label": "State", "var": "state", "width": 200},
-    {"label": "Country", "var": "country", "width": 200},
-    {"label": "Pincode", "var": "pincode", "width": 160},
-    {"label": "Financial Year Start (DD-MM)", "var": "fy_start", "width": 160},
-    {"label": "Financial Year End (DD-MM)", "var": "fy_end", "width": 160},
-    {"label": "Books Beginning From (YYYY-MM-DD)", "var": "books_begin", "width": 200},
+# Create/Edit form field definitions organised into logical sections.
+# Only the existing finalized Company fields/schema are used — no invented
+# accounting fields (GSTIN/PAN/etc.).
+_FORM_SECTIONS: List[Dict[str, Any]] = [
+    {
+        "title": "Company Information",
+        "fields": [
+            {"label": "Company Name *", "var": "name", "kind": "entry", "width": 320},
+            {"label": "Company Code", "var": "code", "kind": "readonly", "width": 160},
+            {"label": "Phone", "var": "mobile", "kind": "entry", "width": 200},
+            {"label": "Email", "var": "email", "kind": "entry", "width": 280},
+        ],
+    },
+    {
+        "title": "Address",
+        "fields": [
+            {"label": "Address", "var": "address", "kind": "entry", "width": 420},
+            {"label": "State", "var": "state", "kind": "entry", "width": 200},
+            {"label": "Country", "var": "country", "kind": "entry", "width": 200},
+            {"label": "Pincode", "var": "pincode", "kind": "entry", "width": 160},
+        ],
+    },
+    {
+        "title": "Financial Year",
+        "columns": 3,
+        "fields": [
+            {"label": "FY Start (DD-MM)", "var": "fy_start", "kind": "entry", "width": 120},
+            {"label": "FY End (DD-MM)", "var": "fy_end", "kind": "entry", "width": 120},
+            {"label": "Books Beginning From", "var": "books_begin", "kind": "entry", "width": 180},
+        ],
+    },
 ]
 
 _FIELD_DEFAULTS = {
@@ -70,7 +94,12 @@ def _company_code(company_id: int) -> str:
 
 
 class _CompanyFormState:
-    """Shared Create/Edit form built once and reused for both modes."""
+    """Shared Create/Edit form built once and reused for both modes.
+
+    Layout: fixed header on top, scrollable two-column form in the middle,
+    fixed bottom action bar.  Only the form body scrolls; the header and the
+    action bar always stay visible.
+    """
 
     def __init__(self, owner: "CompanyManagementUI"):
         self.owner = owner
@@ -82,11 +111,13 @@ class _CompanyFormState:
         self.mode: Optional[str] = None  # "create" | "edit"
         self.company_id: Optional[int] = None
         self.vars: Dict[str, tk.StringVar] = {}
+        self.entries: Dict[str, ctk.CTkEntry] = {}
         self._build_header()
         self._build_form()
+        self._build_actions()
 
     # ------------------------------------------------------------------ #
-    # header
+    # header (fixed)
     # ------------------------------------------------------------------ #
     def _build_header(self) -> None:
         header = ctk.CTkFrame(self.main, fg_color="transparent")
@@ -112,96 +143,175 @@ class _CompanyFormState:
         self.subtitle_label.pack(anchor="w")
 
     # ------------------------------------------------------------------ #
-    # form card
+    # form body (scrollable, two-column)
     # ------------------------------------------------------------------ #
     def _build_form(self) -> None:
-        card = ctk.CTkFrame(
+        body = ctk.CTkFrame(
             self.main, fg_color=config.COLOR_BG_SECONDARY,
             corner_radius=config.CARD_CORNER_RADIUS,
             border_width=1, border_color=config.COLOR_CARD_BORDER,
         )
-        card.grid(row=1, column=0, sticky="nsew")
-        card.grid_rowconfigure(0, weight=1)
-        card.grid_columnconfigure(0, weight=1)
+        body.grid(row=1, column=0, sticky="nsew")
+        body.grid_rowconfigure(0, weight=1)
+        body.grid_columnconfigure(0, weight=1)
 
-        scroll = ctk.CTkScrollableFrame(card, fg_color="transparent", corner_radius=0)
-        scroll.grid(row=0, column=0, sticky="nsew", padx=config.SPACING_LG, pady=config.SPACING_LG)
+        self.scroll = ctk.CTkScrollableFrame(
+            body, fg_color="transparent", corner_radius=0,
+            scrollbar_button_color=config.COLOR_BG_TERTIARY,
+        )
+        self.scroll.grid(row=0, column=0, sticky="nsew", padx=config.SPACING_LG,
+                         pady=(config.SPACING_LG, config.SPACING_SM))
+        self.scroll.grid_columnconfigure(0, weight=1)
 
-        for field in _FORM_FIELDS:
-            var = tk.StringVar(value=_FIELD_DEFAULTS.get(field["var"], ""))
-            self.vars[field["var"]] = var
-            row = ctk.CTkFrame(scroll, fg_color="transparent")
-            row.pack(fill="x", pady=config.SPACING_XS)
-            ctk.CTkLabel(
-                row, text=field["label"], font=ctk.CTkFont(size=config.FONT_BODY_SIZE),
-                text_color=config.COLOR_TEXT_SECONDARY, width=280, anchor="w",
-            ).pack(side="left")
-            entry = ctk.CTkEntry(
-                row, textvariable=var, width=field["width"],
-                corner_radius=config.INPUT_CORNER_RADIUS,
+        # Create the StringVars first so _form_data / enter_* can read them.
+        for section in _FORM_SECTIONS:
+            for field in section["fields"]:
+                if field["var"] not in self.vars:
+                    self.vars[field["var"]] = tk.StringVar(
+                        value=_FIELD_DEFAULTS.get(field["var"], ""))
+
+        self.section_frames: List[ctk.CTkFrame] = []
+        row_index = 0
+        for section in _FORM_SECTIONS:
+            row_index = self._build_section(row_index, section)
+        # A trailing spacer row so the last section is never glued to the
+        # bottom of the scroll viewport when extra space is available.
+        self.scroll.grid_rowconfigure(row_index, weight=1, minsize=config.SPACING_SM)
+
+    def _build_section(self, row_index: int, section: Dict[str, Any]) -> int:
+        section_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        section_frame.grid(row=row_index, column=0, columnspan=4, sticky="ew",
+                           pady=(config.SPACING_SM, 0))
+        self.section_frames.append(section_frame)
+
+        columns = section.get("columns", 2)  # fields per row
+        # Each field pair occupies two grid columns (label, entry).
+        grid_columns = columns * 2
+        for gc in range(grid_columns):
+            section_frame.grid_columnconfigure(gc, weight=0 if gc % 2 == 0 else 1)
+        section_frame.grid_columnconfigure(grid_columns, weight=0)
+
+        ctk.CTkLabel(
+            section_frame, text=section["title"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=config.COLOR_PRIMARY,
+        ).grid(row=0, column=0, columnspan=grid_columns + 1, sticky="w",
+               pady=(0, config.SPACING_SM))
+
+        fields = section["fields"]
+        rows_used = (len(fields) + columns - 1) // columns
+        # Place fields N-per-row using a label/entry pair per grid slot.
+        for index, field in enumerate(fields):
+            row = index // columns + 1
+            gc = (index % columns) * 2
+            label = ctk.CTkLabel(
+                section_frame, text=field["label"],
+                font=ctk.CTkFont(size=13),
+                text_color=config.COLOR_TEXT_SECONDARY, anchor="w", width=150,
+                height=28,
             )
-            entry.pack(side="left", fill="x", expand=True, padx=(config.SPACING_SM, 0))
-            if field["var"] == "code":
-                self.code_entry = entry
-                entry.configure(state="readonly")
+            label.grid(row=row, column=gc, sticky="w", padx=(0, config.SPACING_SM),
+                       pady=(config.SPACING_XS, config.SPACING_XS))
+            var = self.vars[field["var"]]
+            if field["kind"] == "readonly":
+                entry = ctk.CTkEntry(
+                    section_frame, textvariable=var, width=field["width"],
+                    height=28, corner_radius=config.INPUT_CORNER_RADIUS,
+                    state="readonly",
+                )
+            else:
+                entry = ctk.CTkEntry(
+                    section_frame, textvariable=var, width=field["width"],
+                    height=28, corner_radius=config.INPUT_CORNER_RADIUS,
+                )
+            entry.grid(row=row, column=gc + 1, sticky="w", padx=(0, config.SPACING_LG),
+                       pady=(config.SPACING_XS, config.SPACING_XS))
+            self.entries[field["var"]] = entry
 
-        buttons = ctk.CTkFrame(card, fg_color="transparent")
-        buttons.grid(row=1, column=0, sticky="ew", padx=config.SPACING_LG,
-                     pady=(config.SPACING_SM, config.SPACING_LG))
+        return row_index + rows_used + 1
+
+    # ------------------------------------------------------------------ #
+    # bottom action bar (fixed)
+    # ------------------------------------------------------------------ #
+    def _build_actions(self) -> None:
+        bar = ctk.CTkFrame(self.main, fg_color="transparent")
+        bar.grid(row=2, column=0, sticky="ew", pady=(config.SPACING_SM, 0))
+        bar.grid_columnconfigure(0, weight=1)
+
+        # Feedback message shown above the action buttons (hidden when empty).
+        self.message_label = ctk.CTkLabel(
+            bar, text="", font=ctk.CTkFont(size=12), anchor="w", justify="left",
+            wraplength=1100, height=24,
+        )
+        self.message_label.grid(row=0, column=0, sticky="ew")
+
+        buttons = ctk.CTkFrame(bar, fg_color="transparent")
+        buttons.grid(row=1, column=0, sticky="ew")
+
         self.btn_save = ctk.CTkButton(
-            buttons, text="Save", width=110, height=34,
+            buttons, text="Save", width=120, height=36,
             corner_radius=config.BUTTON_CORNER_RADIUS, command=self.owner._save_company,
         )
         self.btn_save.pack(side="left", padx=(0, config.SPACING_SM))
+        self.btn_save_new = ctk.CTkButton(
+            buttons, text="Save & New", width=120, height=36,
+            corner_radius=config.BUTTON_CORNER_RADIUS, command=self.owner._save_and_new,
+        )
+        self.btn_save_new.pack(side="left", padx=(0, config.SPACING_SM))
         self.btn_update = ctk.CTkButton(
-            buttons, text="Update", width=110, height=34,
+            buttons, text="Update", width=120, height=36,
             corner_radius=config.BUTTON_CORNER_RADIUS, command=self.owner._update_company,
         )
-        self.btn_update.pack(side="left", padx=(0, config.SPACING_SM))
         self.btn_clear = ctk.CTkButton(
-            buttons, text="Clear", width=100, height=34,
+            buttons, text="Clear", width=100, height=36,
             corner_radius=config.BUTTON_CORNER_RADIUS,
             fg_color="transparent", border_width=1, command=self.owner._clear_form,
         )
         self.btn_clear.pack(side="left", padx=(0, config.SPACING_SM))
         self.btn_cancel = ctk.CTkButton(
-            buttons, text="Cancel", width=100, height=34,
+            buttons, text="Cancel", width=100, height=36,
             corner_radius=config.BUTTON_CORNER_RADIUS,
             fg_color="transparent", border_width=1, command=self.owner._go_list,
         )
         self.btn_cancel.pack(side="left")
 
         hint = ctk.CTkLabel(
-            self.main,
-            text="   ".join(f"{key} {label}" for key, label in [
+            buttons, text="   ".join(f"{key} {label}" for key, label in [
                 ("Ctrl+S", "Save / Update"), ("Esc", "Cancel / Back"),
             ]),
-            font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_MUTED, anchor="w",
+            font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_MUTED, anchor="e",
         )
-        hint.grid(row=2, column=0, sticky="ew", pady=(config.SPACING_SM, 0))
+        hint.pack(side="right")
 
     # ------------------------------------------------------------------ #
     # mode switching (shared component reused for create and edit)
     # ------------------------------------------------------------------ #
+    def _set_actions_for_mode(self, mode: str) -> None:
+        self.mode = mode
+        if mode == "edit":
+            self.btn_update.pack(side="left", padx=(0, config.SPACING_SM))
+            self.btn_save.pack_forget()
+            self.btn_save_new.pack_forget()
+        else:
+            self.btn_update.pack_forget()
+            self.btn_save.pack(side="left", padx=(0, config.SPACING_SM))
+            self.btn_save_new.pack(side="left", padx=(0, config.SPACING_SM))
+
     def enter_create(self) -> None:
         self.mode = "create"
         self.company_id = None
         self.title_label.configure(text="Create Company")
         self.subtitle_label.configure(text="Create a new company")
-        for var in self.vars.values():
-            var.set("")
-        self.vars["fy_start"].set("01-04")
-        self.vars["fy_end"].set("31-03")
-        self.btn_save.pack(side="left", padx=(0, config.SPACING_SM))
-        self.btn_update.pack_forget()
-        self.btn_save.configure(state="normal")
-        self.btn_update.configure(state="disabled")
+        self._reset_fields()
+        self._set_actions_for_mode("create")
+        self._set_error("")
+        self._set_success("")
 
     def enter_edit(self, company: Any) -> None:
         self.mode = "edit"
         self.company_id = company.id
         self.title_label.configure(text="Edit Company")
-        self.subtitle_label.configure(text="Update company details")
+        self.subtitle_label.configure(text=f"Edit Company: {company.company_name}")
         self.vars["name"].set(company.company_name)
         self.vars["address"].set(company.address)
         self.vars["state"].set(company.state)
@@ -213,13 +323,22 @@ class _CompanyFormState:
         self.vars["fy_end"].set(company.financial_year_end)
         self.vars["books_begin"].set(company.books_begin_date)
         self.vars["code"].set(_company_code(company.id))
-        self.btn_update.pack(side="left", padx=(0, config.SPACING_SM))
-        self.btn_save.pack_forget()
-        self.btn_save.configure(state="disabled")
-        self.btn_update.configure(state="normal")
+        self._set_actions_for_mode("edit")
+        self._set_error("")
+        self._set_success("")
 
     def clear(self) -> None:
         self.enter_create()
+
+    def _reset_fields(self) -> None:
+        for var_name, var in self.vars.items():
+            var.set(_FIELD_DEFAULTS.get(var_name, ""))
+
+    def _set_error(self, message: str) -> None:
+        self.message_label.configure(text=message, text_color=config.COLOR_EXPENSE)
+
+    def _set_success(self, message: str) -> None:
+        self.message_label.configure(text=message, text_color=config.COLOR_INCOME)
 
     def is_visible(self) -> bool:
         try:
@@ -267,39 +386,55 @@ class _CompanyViewState:
             border_width=1, border_color=config.COLOR_CARD_BORDER,
         )
         card.grid(row=1, column=0, sticky="nsew")
+        card.grid_rowconfigure(0, weight=1)
         card.grid_columnconfigure(0, weight=1)
 
+        scroll = ctk.CTkScrollableFrame(card, fg_color="transparent", corner_radius=0)
+        scroll.grid(row=0, column=0, sticky="nsew", padx=config.SPACING_LG,
+                    pady=config.SPACING_LG)
+
         self.value_labels: Dict[str, ctk.CTkLabel] = {}
-        for index, field in enumerate(_FORM_FIELDS):
-            label = ctk.CTkLabel(
-                card, text=field["label"], font=ctk.CTkFont(size=12),
-                text_color=config.COLOR_TEXT_SECONDARY, width=280, anchor="w",
-            )
-            label.grid(row=index, column=0, sticky="w", padx=(config.SPACING_LG, config.SPACING_SM),
-                       pady=(config.SPACING_XS, 0))
-            value = ctk.CTkLabel(
-                card, text="", font=ctk.CTkFont(size=13), anchor="w",
-                justify="left", wraplength=480,
-            )
-            value.grid(row=index, column=1, sticky="ew", padx=(0, config.SPACING_LG),
-                       pady=(config.SPACING_XS, 0))
-            self.value_labels[field["var"]] = value
-        card.grid_rowconfigure(len(_FORM_FIELDS), weight=1)
+        row_index = 0
+        for section in _FORM_SECTIONS:
+            columns = section.get("columns", 2)
+            grid_columns = columns * 2
+            ctk.CTkLabel(
+                scroll, text=section["title"], font=ctk.CTkFont(size=13, weight="bold"),
+                text_color=config.COLOR_PRIMARY,
+            ).grid(row=row_index, column=0, columnspan=grid_columns + 1, sticky="w",
+                   pady=(config.SPACING_MD, config.SPACING_XS))
+            row_index += 1
+            seen = set()
+            for field in section["fields"]:
+                if field["var"] in seen:
+                    continue
+                seen.add(field["var"])
+                slot = len(seen) - 1
+                gc = (slot % columns) * 2
+                if slot % columns == 0:
+                    row = row_index
+                    row_index += 1
+                ctk.CTkLabel(
+                    scroll, text=field["label"], font=ctk.CTkFont(size=12),
+                    text_color=config.COLOR_TEXT_SECONDARY, width=160, anchor="w",
+                ).grid(row=row, column=gc, sticky="w",
+                       padx=(0, config.SPACING_SM), pady=config.SPACING_XS)
+                value = ctk.CTkLabel(
+                    scroll, text="", font=ctk.CTkFont(size=13), anchor="w",
+                    justify="left", wraplength=380,
+                )
+                value.grid(row=row, column=gc + 1, sticky="ew",
+                           padx=(0, config.SPACING_LG), pady=config.SPACING_XS)
+                self.value_labels[field["var"]] = value
 
         buttons = ctk.CTkFrame(card, fg_color="transparent")
-        buttons.grid(row=len(_FORM_FIELDS) + 1, column=0, columnspan=2, sticky="ew",
-                     padx=config.SPACING_LG, pady=(config.SPACING_LG, config.SPACING_LG))
-        ctk.CTkButton(
+        buttons.grid(row=1, column=0, sticky="ew", padx=config.SPACING_LG,
+                     pady=(config.SPACING_SM, config.SPACING_LG))
+        self.btn_back_full = ctk.CTkButton(
             buttons, text="Back", width=110, height=34,
             corner_radius=config.BUTTON_CORNER_RADIUS, command=self.owner._go_list,
-        ).pack(side="left")
-
-        hint = ctk.CTkLabel(
-            self.main,
-            text="Esc to return to Company List",
-            font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_MUTED, anchor="w",
         )
-        hint.grid(row=2, column=0, sticky="ew", pady=(config.SPACING_SM, 0))
+        self.btn_back_full.pack(side="left")
 
     def show(self, company: Any) -> None:
         mapping = {
@@ -332,7 +467,8 @@ class _CompanyListState:
         self.owner = owner
         self.main = ctk.CTkFrame(owner.main_frame, corner_radius=0, fg_color="transparent")
         self.main.grid(row=1, column=0, sticky="nsew")
-        self.main.grid_rowconfigure(0, weight=1)
+        # Row 1 (the list card) absorbs all extra vertical space.
+        self.main.grid_rowconfigure(1, weight=1)
         self.main.grid_columnconfigure(0, weight=1)
 
         self.search_var = tk.StringVar()
@@ -341,23 +477,24 @@ class _CompanyListState:
 
         self._build_header()
         self._build_list_card()
-        self._build_info_bar()
+        self._build_status_line()
 
     # ------------------------------------------------------------------ #
-    # header (owned by the list state; hidden when a sub-state is open)
+    # header (fixed): title + toolbar with every important action visible
     # ------------------------------------------------------------------ #
     def _build_header(self) -> None:
         header = ctk.CTkFrame(self.main, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", pady=(0, config.SPACING_LG))
+        header.grid_columnconfigure(1, weight=1)
 
         self.btn_back = ctk.CTkButton(
             header, text="←", width=36, height=32, corner_radius=config.BUTTON_CORNER_RADIUS,
             command=self.owner._back_to_hub,
         )
-        self.btn_back.pack(side="left")
+        self.btn_back.grid(row=0, column=0, sticky="w")
 
         title_block = ctk.CTkFrame(header, fg_color="transparent")
-        title_block.pack(side="left", padx=(config.SPACING_MD, 0))
+        title_block.grid(row=0, column=1, sticky="w", padx=(config.SPACING_MD, 0))
         ctk.CTkLabel(
             title_block, text="Company Management",
             font=ctk.CTkFont(size=config.FONT_TITLE_SIZE, weight="bold"),
@@ -367,26 +504,54 @@ class _CompanyListState:
             font=ctk.CTkFont(size=12), text_color=config.COLOR_TEXT_SECONDARY,
         ).pack(anchor="w")
 
+        # Toolbar: every workflow action is a visible button.
         actions = ctk.CTkFrame(header, fg_color="transparent")
-        actions.pack(side="right")
-        self.btn_refresh = ctk.CTkButton(
-            actions, text="F5 Refresh", width=100, height=32,
-            corner_radius=config.BUTTON_CORNER_RADIUS, command=self.owner.refresh_companies,
-        )
-        self.btn_refresh.pack(side="left", padx=(0, config.SPACING_SM))
+        actions.grid(row=0, column=2, sticky="e")
         self.btn_new = ctk.CTkButton(
-            actions, text="+ New Company", width=130, height=32,
+            actions, text="+ New Company", width=140, height=32,
             corner_radius=config.BUTTON_CORNER_RADIUS,
             fg_color=config.COLOR_PRIMARY, hover_color=config.COLOR_PRIMARY_HOVER,
             text_color="#FFFFFF", command=self.owner._go_create,
         )
         self.btn_new.pack(side="left", padx=(0, config.SPACING_SM))
-        self.btn_header_search = ctk.CTkButton(
-            actions, text="Search", width=90, height=32,
-            corner_radius=config.BUTTON_CORNER_RADIUS,
-            fg_color="transparent", border_width=1, command=self.owner._focus_search,
+        self.btn_edit_toolbar = ctk.CTkButton(
+            actions, text="Edit", width=80, height=32,
+            corner_radius=config.BUTTON_CORNER_RADIUS, command=self.owner._edit_selected,
         )
-        self.btn_header_search.pack(side="left")
+        self.btn_edit_toolbar.pack(side="left", padx=(0, config.SPACING_SM))
+        self.btn_delete_toolbar = ctk.CTkButton(
+            actions, text="Delete", width=90, height=32,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            fg_color=config.COLOR_EXPENSE, hover_color=config.COLOR_EXPENSE_HOVER,
+            command=self.owner._delete_company,
+        )
+        self.btn_delete_toolbar.pack(side="left", padx=(0, config.SPACING_SM))
+        self.btn_view_toolbar = ctk.CTkButton(
+            actions, text="Open / View", width=100, height=32,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            fg_color="transparent", border_width=1, command=self.owner._view_selected,
+        )
+        self.btn_view_toolbar.pack(side="left", padx=(0, config.SPACING_SM))
+        self.btn_refresh = ctk.CTkButton(
+            actions, text="Refresh", width=90, height=32,
+            corner_radius=config.BUTTON_CORNER_RADIUS, command=self.owner.refresh_companies,
+        )
+        self.btn_refresh.pack(side="left")
+
+        # Search sits directly in the header toolbar, visible.
+        search_box = ctk.CTkFrame(header, fg_color="transparent")
+        search_box.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(config.SPACING_SM, 0))
+        search_box.grid_columnconfigure(0, weight=1)
+        self.search_entry = ctk.CTkEntry(
+            search_box, textvariable=self.search_var, height=32,
+            corner_radius=config.INPUT_CORNER_RADIUS,
+            placeholder_text="Search companies by name, email or phone…",
+        )
+        self.search_entry.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(
+            search_box, text="Ctrl+F", font=ctk.CTkFont(size=11),
+            text_color=config.COLOR_TEXT_MUTED,
+        ).grid(row=0, column=1, padx=(config.SPACING_SM, 0))
 
     # ------------------------------------------------------------------ #
     # list card — the primary content, given full space
@@ -399,7 +564,7 @@ class _CompanyListState:
         )
         card.grid(row=1, column=0, sticky="nsew")
         card.grid_columnconfigure(0, weight=1)
-        card.grid_rowconfigure(2, weight=1)
+        card.grid_rowconfigure(1, weight=1)
 
         top = ctk.CTkFrame(card, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=config.SPACING_LG,
@@ -408,18 +573,14 @@ class _CompanyListState:
             top, text="Companies (0)", font=ctk.CTkFont(size=14, weight="bold"),
         )
         self.list_title.pack(side="left")
-
-        search_row = ctk.CTkFrame(card, fg_color="transparent")
-        search_row.grid(row=1, column=0, sticky="ew", padx=config.SPACING_LG, pady=(0, config.SPACING_SM))
-        self.search_entry = ctk.CTkEntry(
-            search_row, textvariable=self.search_var, width=280,
-            corner_radius=config.INPUT_CORNER_RADIUS,
-            placeholder_text="Search companies…",
-        )
-        self.search_entry.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(
+            top, text="Select a company to edit, view or delete",
+            font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_MUTED,
+        ).pack(side="left", padx=(config.SPACING_MD, 0))
 
         tree_frame = ctk.CTkFrame(card, fg_color="transparent")
-        tree_frame.grid(row=2, column=0, sticky="nsew", padx=config.SPACING_LG, pady=(0, config.SPACING_SM))
+        tree_frame.grid(row=1, column=0, sticky="nsew", padx=config.SPACING_LG,
+                        pady=(0, config.SPACING_SM))
         tree_frame.grid_rowconfigure(0, weight=1)
         tree_frame.grid_columnconfigure(0, weight=1)
 
@@ -430,7 +591,7 @@ class _CompanyListState:
         for col in _LIST_COLUMNS:
             self.tree.heading(col["id"], text=col["heading"])
             self.tree.column(col["id"], width=col["width"], anchor=col["anchor"],
-                             stretch=True, minwidth=30)
+                             stretch=col.get("stretch", True), minwidth=40)
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
@@ -439,9 +600,10 @@ class _CompanyListState:
         hsb.grid(row=1, column=0, sticky="ew")
         self.tree.bind("<<TreeviewSelect>>", self.owner._on_select)
         self.tree.bind("<Return>", self.owner._on_enter_pressed)
+        self.tree.bind("<Double-1>", self.owner._on_double_click)
 
         footer = ctk.CTkFrame(card, fg_color="transparent")
-        footer.grid(row=3, column=0, sticky="ew", padx=config.SPACING_LG,
+        footer.grid(row=2, column=0, sticky="ew", padx=config.SPACING_LG,
                     pady=(0, config.SPACING_SM))
         self.page_label = ctk.CTkLabel(
             footer, text="Showing 0 to 0 of 0 companies",
@@ -450,15 +612,15 @@ class _CompanyListState:
         self.page_label.pack(side="left")
 
         self.action_row = ctk.CTkFrame(card, fg_color="transparent")
-        self.action_row.grid(row=4, column=0, sticky="ew", padx=config.SPACING_LG,
+        self.action_row.grid(row=3, column=0, sticky="ew", padx=config.SPACING_LG,
                              pady=(0, config.SPACING_LG))
         self.btn_edit = ctk.CTkButton(
-            self.action_row, text="Edit (Enter)", width=110, height=32,
+            self.action_row, text="Edit (Enter)", width=120, height=32,
             corner_radius=config.BUTTON_CORNER_RADIUS, command=self.owner._edit_selected,
         )
         self.btn_edit.pack(side="left", padx=(0, config.SPACING_SM))
         self.btn_delete = ctk.CTkButton(
-            self.action_row, text="Delete (Del)", width=110, height=32,
+            self.action_row, text="Delete (Del)", width=120, height=32,
             corner_radius=config.BUTTON_CORNER_RADIUS,
             fg_color=config.COLOR_EXPENSE, hover_color=config.COLOR_EXPENSE_HOVER,
             command=self.owner._delete_company,
@@ -477,42 +639,27 @@ class _CompanyListState:
         self.btn_edit.configure(state=state)
         self.btn_delete.configure(state=state)
         self.btn_view.configure(state=state)
+        self.btn_edit_toolbar.configure(state=state)
+        self.btn_delete_toolbar.configure(state=state)
+        self.btn_view_toolbar.configure(state=state)
 
     # ------------------------------------------------------------------ #
-    # compact info bar (never competes with the table for space)
+    # compact status line (never competes with the table for space)
     # ------------------------------------------------------------------ #
-    def _build_info_bar(self) -> None:
+    def _build_status_line(self) -> None:
         bar = ctk.CTkFrame(self.main, fg_color=config.COLOR_BG_SECONDARY,
                            corner_radius=config.CARD_CORNER_RADIUS,
                            border_width=1, border_color=config.COLOR_CARD_BORDER)
         bar.grid(row=2, column=0, sticky="ew", pady=(config.SPACING_MD, 0))
+        self.status_label = ctk.CTkLabel(
+            bar, text="", font=ctk.CTkFont(size=11),
+            text_color=config.COLOR_TEXT_SECONDARY, anchor="w", justify="left",
+        )
+        self.status_label.pack(side="left", padx=config.SPACING_LG, pady=config.SPACING_SM,
+                               fill="x", expand=True)
 
-        ctk.CTkLabel(
-            bar, text="Keyboard Shortcuts", font=ctk.CTkFont(size=12, weight="bold"),
-        ).pack(side="left", padx=config.SPACING_LG)
-        for key, label in [
-            ("F5", "Refresh"),
-            ("Ctrl+N", "New Company"),
-            ("Ctrl+S", "Save"),
-            ("Ctrl+F", "Search"),
-            ("Del", "Delete"),
-            ("Esc", "Back"),
-        ]:
-            ctk.CTkLabel(
-                bar, text=key, font=ctk.CTkFont(size=11, weight="bold"),
-                text_color=config.COLOR_PRIMARY,
-            ).pack(side="left", padx=(config.SPACING_MD, 0))
-            ctk.CTkLabel(
-                bar, text=label, font=ctk.CTkFont(size=11),
-                text_color=config.COLOR_TEXT_SECONDARY,
-            ).pack(side="left", padx=(2, 0))
-        # Note on its own line so it is never squeezed by the shortcut keys.
-        ctk.CTkLabel(
-            bar, text="Note: At least one company must always exist. "
-                     "The last remaining company cannot be deleted.",
-            font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_MUTED,
-            anchor="w", justify="left",
-        ).pack(fill="x", padx=config.SPACING_LG, pady=(2, config.SPACING_SM))
+    def set_status(self, text: str) -> None:
+        self.status_label.configure(text=text)
 
     def is_visible(self) -> bool:
         try:
@@ -643,7 +790,7 @@ class CompanyManagementUI:
     def refresh_companies(self) -> None:
         self.companies = self.service.list_companies(self.list.search_var.get().strip())
         self._render_rows()
-        self._set_status(f"Loaded {len(self.companies)} companies")
+        self.list.set_status(f"Loaded {len(self.companies)} companies")
 
     def _render_rows(self) -> None:
         total = len(self.companies)
@@ -684,19 +831,16 @@ class CompanyManagementUI:
         if self.list.tree.selection():
             self._edit_selected()
 
+    def _on_double_click(self, event=None) -> None:
+        if self.list.tree.selection():
+            self._view_selected()
+
     def _focus_search(self) -> None:
         try:
             self.list.search_entry.focus_set()
             self.list.search_entry.select_range(0, "end")
         except Exception:
             pass
-
-    def _set_status(self, text: str) -> None:
-        try:
-            self.parent.update_idletasks()
-        except Exception:
-            pass
-        self.status_text = text
 
     # ------------------------------------------------------------------ #
     # actions
@@ -737,45 +881,12 @@ class CompanyManagementUI:
             dialogs.error("Delete", exc.message, parent=self.parent)
             return
         self.list.selected_id = None
+        self.list.set_status(f"Company '{company.company_name}' deleted")
         self.refresh_companies()
 
     def _clear_form(self) -> None:
         self.form.clear()
-        self._set_status("Form cleared")
-
-    def _save_company(self) -> None:
-        data = self._form_data()
-        try:
-            company = self.service.create_company(
-                data["name"], data["address"], data["mobile"], data["email"],
-                data["fy_start"], data["fy_end"], data["books_begin"],
-                data["state"], data["country"], data["pincode"],
-            )
-        except CompanyServiceError as exc:
-            dialogs.error("Validation", exc.message, parent=self.parent)
-            self._set_status(exc.message)
-            return
-        self._set_status(f"Company '{company.company_name}' saved")
-        self._go_list()
-
-    def _update_company(self) -> None:
-        company_id = self.form.company_id
-        if company_id is None:
-            dialogs.warn("Update", "Select a company to update first.", parent=self.parent)
-            return
-        data = self._form_data()
-        try:
-            company = self.service.update_company(
-                company_id, data["name"], data["address"], data["mobile"],
-                data["email"], data["fy_start"], data["fy_end"], data["books_begin"],
-                data["state"], data["country"], data["pincode"],
-            )
-        except CompanyServiceError as exc:
-            dialogs.error("Validation", exc.message, parent=self.parent)
-            self._set_status(exc.message)
-            return
-        self._set_status(f"Company '{company.company_name}' updated")
-        self._go_list()
+        self.form._set_success("Form cleared")
 
     def _form_data(self) -> dict:
         v = self.form.vars
@@ -791,6 +902,56 @@ class CompanyManagementUI:
             "fy_end": v["fy_end"].get().strip() or "31-03",
             "books_begin": v["books_begin"].get().strip(),
         }
+
+    def _save_company(self) -> None:
+        data = self._form_data()
+        try:
+            company = self.service.create_company(
+                data["name"], data["address"], data["mobile"], data["email"],
+                data["fy_start"], data["fy_end"], data["books_begin"],
+                data["state"], data["country"], data["pincode"],
+            )
+        except CompanyServiceError as exc:
+            self.form._set_error(exc.message)
+            dialogs.error("Validation", exc.message, parent=self.parent)
+            return
+        self.list.set_status(f"✓ Company '{company.company_name}' created successfully.")
+        self._go_list()
+
+    def _save_and_new(self) -> None:
+        data = self._form_data()
+        try:
+            company = self.service.create_company(
+                data["name"], data["address"], data["mobile"], data["email"],
+                data["fy_start"], data["fy_end"], data["books_begin"],
+                data["state"], data["country"], data["pincode"],
+            )
+        except CompanyServiceError as exc:
+            self.form._set_error(exc.message)
+            dialogs.error("Validation", exc.message, parent=self.parent)
+            return
+        self.form.enter_create()
+        self.form._set_success(f"✓ Company '{company.company_name}' created successfully.")
+        self.list.set_status(f"Company '{company.company_name}' created successfully.")
+
+    def _update_company(self) -> None:
+        company_id = self.form.company_id
+        if company_id is None:
+            dialogs.warn("Update", "Select a company to update first.", parent=self.parent)
+            return
+        data = self._form_data()
+        try:
+            company = self.service.update_company(
+                company_id, data["name"], data["address"], data["mobile"],
+                data["email"], data["fy_start"], data["fy_end"], data["books_begin"],
+                data["state"], data["country"], data["pincode"],
+            )
+        except CompanyServiceError as exc:
+            self.form._set_error(exc.message)
+            dialogs.error("Validation", exc.message, parent=self.parent)
+            return
+        self.list.set_status(f"✓ Company '{company.company_name}' updated successfully.")
+        self._go_list()
 
 
 def show_company_management(parent: tk.Widget, company_service: CompanyService,

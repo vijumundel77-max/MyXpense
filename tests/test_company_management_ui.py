@@ -70,12 +70,22 @@ class CompanyManagementUITest(unittest.TestCase):
             " VALUES (?, ?, ?, ?)",
             (2, "UI Beta Ltd", "01-04", "31-03"),
         )
+        # A visible root is required so winfo_ismapped()/geometry reflect the
+        # real layout (a withdrawn root never maps any widget).
+        try:
+            self.root.deiconify()
+        except Exception:
+            pass
         self.ui = CompanyManagementUI(self.root, CompanyService(db), current_company_id=1)
         self._sync()
 
     def tearDown(self):
         try:
             self.ui.main_frame.destroy()
+        except Exception:
+            pass
+        try:
+            self.root.withdraw()
         except Exception:
             pass
 
@@ -118,9 +128,19 @@ class CompanyManagementUITest(unittest.TestCase):
         texts = "\n".join(_all_text(self.ui.main_frame))
         for expected in ["Company Management",
                          "Create, view, edit and manage companies",
-                         "F5 Refresh", "+ New Company", "Search",
+                         "+ New Company", "Edit", "Delete", "Open / View",
+                         "Refresh", "Ctrl+F",
                          "Edit (Enter)", "Delete (Del)", "View"]:
             self.assertIn(expected, texts)
+        # Every important workflow action is a VISIBLE button, not only a
+        # keyboard shortcut: the header toolbar carries all of them.
+        self.assertEqual(self.ui.list.btn_new.cget("text"), "+ New Company")
+        self.assertEqual(self.ui.list.btn_edit_toolbar.cget("text"), "Edit")
+        self.assertEqual(self.ui.list.btn_delete_toolbar.cget("text"), "Delete")
+        self.assertEqual(self.ui.list.btn_view_toolbar.cget("text"), "Open / View")
+        self.assertEqual(self.ui.list.btn_refresh.cget("text"), "Refresh")
+        # The search box lives directly in the header toolbar area.
+        self.assertIsNotNone(self.ui.list.search_entry)
 
     def test_selection_enables_actions(self):
         # No selection -> disabled.
@@ -140,8 +160,8 @@ class CompanyManagementUITest(unittest.TestCase):
     def test_form_is_separate_state_not_cramped_in_list(self):
         # The list screen must NOT contain the create form fields.
         list_texts = "\n".join(_all_text(self.ui.list.main))
-        for field in ("Company Name *", "Financial Year Start (DD-MM)",
-                      "Books Beginning From (YYYY-MM-DD)"):
+        for field in ("Company Name *", "FY Start (DD-MM)",
+                      "Books Beginning From"):
             self.assertNotIn(field, list_texts)
         self.assertFalse(hasattr(self.ui.list, "name_var"))
         # The form is its own full state.
@@ -176,8 +196,8 @@ class CompanyManagementUITest(unittest.TestCase):
         for expected in [
             "Company Name *", "Company Code", "Email", "Phone", "Address",
             "State", "Country", "Pincode",
-            "Financial Year Start (DD-MM)", "Financial Year End (DD-MM)",
-            "Books Beginning From (YYYY-MM-DD)",
+            "FY Start (DD-MM)", "FY End (DD-MM)",
+            "Books Beginning From",
         ]:
             self.assertIn(expected, texts)
         self.assertNotIn("GSTIN", texts)
@@ -456,6 +476,110 @@ class CompanyManagementUITest(unittest.TestCase):
             self._sync()
             visible = [s for s in (self.ui.list, self.ui.form, self.ui.view) if s.is_visible()]
             self.assertEqual(len(visible), 1)
+
+    # ------------------------------------------------------------------ #
+    # visible toolbar / no-collapsed-header regression
+    # ------------------------------------------------------------------ #
+    def test_toolbar_buttons_are_mapped_not_collapsed(self):
+        # Regression: the header row previously carried grid weight and could
+        # collapse to 1x1, making every toolbar button invisible.
+        self._sync()
+        for button in (self.ui.list.btn_back, self.ui.list.btn_new,
+                       self.ui.list.btn_edit_toolbar, self.ui.list.btn_delete_toolbar,
+                       self.ui.list.btn_view_toolbar, self.ui.list.btn_refresh):
+            self.assertTrue(button.winfo_ismapped(),
+                            f"{button.cget('text')} should be mapped")
+            self.assertGreater(button.winfo_width(), 1)
+            self.assertGreater(button.winfo_height(), 1)
+        # The header itself must have real geometry.
+        header = self.ui.list.main.winfo_children()[0]
+        self.assertGreater(header.winfo_height(), 30)
+        self.assertTrue(header.winfo_ismapped())
+
+    def test_search_box_in_header_is_mapped(self):
+        self._sync()
+        self.assertTrue(self.ui.list.search_entry.winfo_ismapped())
+        self.assertGreater(self.ui.list.search_entry.winfo_width(), 100)
+
+    def test_status_line_not_clipped(self):
+        # The status line must render its full text without being cut off.
+        self.ui.list.set_status(
+            "Note: At least one company must always exist. The last remaining company cannot be deleted.")
+        self._sync()
+        self.assertIn("last remaining company cannot be deleted",
+                      self.ui.list.status_label.cget("text"))
+
+    # ------------------------------------------------------------------ #
+    # Save & New
+    # ------------------------------------------------------------------ #
+    def test_save_and_new_persists_and_stays_in_create(self):
+        self._go_create()
+        self.ui.form.vars["name"].set("UI Save And New Co")
+        self.ui.form.vars["email"].set("sn@expenzo.test")
+        self.ui._save_and_new()
+        self._sync()
+        # Persisted and the form stays in Create mode (blank).
+        row = db.fetch_one(
+            "SELECT id FROM companies WHERE name = ?", ("UI Save And New Co",))
+        self.assertIsNotNone(row)
+        self.assertTrue(self.ui.form.is_visible())
+        self.assertFalse(self.ui.list.is_visible())
+        self.assertEqual(self.ui.form.mode, "create")
+        self.assertEqual(self.ui.form.vars["name"].get(), "")
+        # A second company can be entered without navigating away.
+        self.ui.form.vars["name"].set("UI Save And New Co 2")
+        self.ui.form.vars["email"].set("sn2@expenzo.test")
+        self.ui._save_company()
+        self._sync()
+        self.assertTrue(self.ui.list.is_visible())
+        row2 = db.fetch_one(
+            "SELECT id FROM companies WHERE name = ?", ("UI Save And New Co 2",))
+        self.assertIsNotNone(row2)
+
+    def test_save_and_new_not_shown_in_edit_mode(self):
+        self.ui.list.tree.selection_set("1")
+        self.ui._on_select()
+        self.ui._go_edit()
+        self._sync()
+        self.assertEqual(self.ui.form.mode, "edit")
+        self.assertEqual(self.ui.form.btn_save_new.winfo_manager(), "")
+        self.assertEqual(self.ui.form.btn_update.winfo_manager() != "", True)
+
+    def test_save_and_new_validation_error_stays_in_create(self):
+        self._go_create()
+        self.ui.form.vars["name"].set("")  # invalid: name required
+        with mock.patch("ui.company_management.dialogs.error") as error:
+            self.ui._save_and_new()
+        self.assertTrue(error.called)
+        self.assertTrue(self.ui.form.is_visible())
+        # No partial company was persisted.
+        remaining = db.fetch_one("SELECT COUNT(*) AS n FROM companies")["n"]
+        self.assertEqual(remaining, 2)
+
+    # ------------------------------------------------------------------ #
+    # create form sections (logical layout contract)
+    # ------------------------------------------------------------------ #
+    def test_create_form_sections_present(self):
+        self._go_create()
+        titles = []
+        for sf in self.ui.form.section_frames:
+            for child in sf.winfo_children():
+                if isinstance(child, ctk.CTkLabel):
+                    try:
+                        titles.append(child.cget("text"))
+                    except Exception:
+                        pass
+        for expected in ["Company Information", "Address", "Financial Year"]:
+            self.assertIn(expected, titles)
+
+    def test_form_has_no_invented_fields(self):
+        # Only the finalized company fields; no GSTIN/PAN/website/city.
+        self._go_create()
+        var_names = set(self.ui.form.vars.keys())
+        self.assertEqual(var_names, {
+            "name", "code", "email", "mobile", "address",
+            "state", "country", "pincode", "fy_start", "fy_end", "books_begin",
+        })
 
     # ------------------------------------------------------------------ #
     # theme cycling
