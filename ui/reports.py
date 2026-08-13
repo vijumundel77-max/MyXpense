@@ -1,15 +1,23 @@
 """
 Expenzo — Reports Hub
-Launcher for the report modules with Expenzo design-system cards.
+Launcher for the report modules with an Expenzo design-system layout:
+
+  header + advanced action  ->  search bar  ->  two-column report cards
+  -> recently opened reports -> how-to-use panel -> bottom shortcut bar
+
+This screen is a UI hub only: every card opens the existing report module
+(service + calculations untouched), and nothing here writes accounting data.
 """
 from __future__ import annotations
 
 import tkinter as tk
+from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
 
 import config
+from services.recent_reports_service import recent_reports, record_report_open
 from ui.day_book_report import show_day_book_report
 from ui.cash_book_report import show_cash_book_report
 from ui.bank_book_report import show_bank_book_report
@@ -21,27 +29,325 @@ from ui.trial_balance_report import show_trial_balance_report
 from ui.balance_sheet_report import show_balance_sheet_report
 
 
-class ReportsHubUI:
-    """Reports hub that opens individual report screens."""
+class ReportsHubUI(ctk.CTkFrame):
+    """Reports hub that opens individual report screens.
+
+    Subclasses CTkFrame so the hub is a real managed widget: it can be
+    packed/destroyed, owns ``winfo_toplevel``, and participates in keyboard
+    focus exactly like the other view hubs (Masters, Vouchers).
+    """
+
+    # The real report registry: each entry maps to an existing report module.
+    CARD_DEFINITIONS: List[Dict[str, object]] = [
+        {
+            "title": "Day Book",
+            "subtitle": "View day-wise transaction summary",
+            "icon": "▤",
+            "open": lambda self: self._open_report(show_day_book_report, "Day Book"),
+        },
+        {
+            "title": "Cash Book",
+            "subtitle": "Cash receipts and payments",
+            "icon": "₹",
+            "open": lambda self: self._open_report(show_cash_book_report, "Cash Book"),
+        },
+        {
+            "title": "Bank Book",
+            "subtitle": "Bank transactions and statements",
+            "icon": "▨",
+            "open": lambda self: self._open_report(show_bank_book_report, "Bank Book"),
+        },
+        {
+            "title": "Party Ledger",
+            "subtitle": "Ledger accounts of parties",
+            "icon": "▥",
+            "open": lambda self: self._open_report(show_party_ledger_report, "Party Ledger"),
+        },
+        {
+            "title": "Account Book",
+            "subtitle": "Account statement view",
+            "icon": "▦",
+            "open": lambda self: self._open_report(show_account_book_report, "Account Book"),
+        },
+        {
+            "title": "Outstanding Report",
+            "subtitle": "Receivables and payables overview",
+            "icon": "▧",
+            "open": lambda self: self._open_report(show_outstanding_report, "Outstanding Report"),
+        },
+        {
+            "title": "Ageing Report",
+            "subtitle": "Ageing buckets and overdue analysis",
+            "icon": "◔",
+            "open": lambda self: self._open_report(show_ageing_report, "Ageing Report"),
+        },
+        {
+            "title": "Trial Balance",
+            "subtitle": "Trial balance of accounts",
+            "icon": "▤",
+            "open": lambda self: self._open_report(show_trial_balance_report, "Trial Balance"),
+        },
+        {
+            "title": "Balance Sheet",
+            "subtitle": "Assets = Liabilities + Capital",
+            "icon": "▦",
+            "open": lambda self: self._open_report(show_balance_sheet_report, "Balance Sheet"),
+        },
+    ]
 
     def __init__(self, parent: tk.Widget, company_id: int):
+        super().__init__(parent, corner_radius=0, fg_color="transparent")
         self.parent = parent
         self.company_id = company_id
+        self.pack(fill="both", expand=True)
         self.current_frame: Optional[tk.Widget] = None
+        self.current_report_ui: Optional[object] = None
+        self.selected_title: Optional[str] = None
+        self._selected_card: Optional[ctk.CTkFrame] = None
+        self._report_defs: List[Dict[str, object]] = []
+        self._card_widgets: Dict[str, ctk.CTkFrame] = {}
 
-        self.main_frame = ctk.CTkFrame(parent, corner_radius=0, fg_color="transparent")
+        self.main_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
         self.main_frame.pack(fill="both", expand=True, padx=config.SPACING_XL, pady=config.SPACING_XL)
 
         self._build_header()
-        self._build_controls()
-        self._build_cards()
+        self._build_search()
+        self._build_body()
+        self._build_shortcut_bar()
 
-    def _open_report(self, opener: Callable[[tk.Widget, int], tk.Widget]) -> None:
+        # Keyboard access to the search box on this screen.
+        self.search_entry.bind("<Control-f>", self._on_ctrl_f)
+        self.search_entry.bind("<Control-F>", self._on_ctrl_f)
+        self._bind_card_keyboard()
+
+    # ------------------------------------------------------------------ #
+    # layout
+    # ------------------------------------------------------------------ #
+    def _build_header(self) -> None:
+        header = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        header.pack(fill="x", pady=(0, config.SPACING_LG))
+
+        title_col = ctk.CTkFrame(header, fg_color="transparent")
+        title_col.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(
+            title_col, text="Reports", font=ctk.CTkFont(size=config.FONT_TITLE_SIZE, weight="bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            title_col, text="Select a report to view",
+            font=ctk.CTkFont(size=12), text_color=config.COLOR_TEXT_SECONDARY,
+        ).pack(anchor="w")
+
+        # "Open Advanced Report Module" -> the full report registry, i.e. this
+        # hub itself.  The app has no separate advanced-report backend, so the
+        # action focuses the search and returns focus to the report grid.
+        self.advanced_btn = ctk.CTkButton(
+            header, text="Open Advanced Report Module", width=220, height=34,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            command=self._on_advanced_report,
+        )
+        self.advanced_btn.pack(side="right")
+
+    def _build_search(self) -> None:
+        self.search_bar = ctk.CTkFrame(
+            self.main_frame, fg_color=config.COLOR_BG_SECONDARY,
+            corner_radius=config.CARD_CORNER_RADIUS, border_width=1,
+            border_color=config.COLOR_CARD_BORDER,
+        )
+        self.search_bar.pack(fill="x", pady=(0, config.SPACING_LG))
+        self.search_bar.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            self.search_bar, text="⌕", font=ctk.CTkFont(size=18),
+            text_color=config.COLOR_TEXT_SECONDARY,
+        ).grid(row=0, column=0, padx=(config.SPACING_LG, config.SPACING_SM))
+
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", self._refresh_cards)
+        self.search_entry = ctk.CTkEntry(
+            self.search_bar, textvariable=self.search_var, height=34,
+            placeholder_text="Search reports...",
+            corner_radius=config.INPUT_CORNER_RADIUS,
+        )
+        self.search_entry.grid(row=0, column=1, sticky="ew", pady=config.SPACING_SM)
+
+        self.search_hint = ctk.CTkLabel(
+            self.search_bar, text="Ctrl+F  Search", font=ctk.CTkFont(size=11),
+            text_color=config.COLOR_TEXT_MUTED,
+        )
+        self.search_hint.grid(row=0, column=2, padx=config.SPACING_LG)
+
+    def _build_body(self) -> None:
+        """Scrollable hub content: report cards, recent reports, help panel."""
+        self.body_container = ctk.CTkScrollableFrame(
+            self.main_frame, fg_color="transparent", corner_radius=0,
+            scrollbar_button_color=config.COLOR_BG_TERTIARY,
+        )
+        self.body_container.pack(fill="both", expand=True)
+        self.body_container.grid_columnconfigure(0, weight=1)
+
+        self._build_cards()
+        self._build_recent()
+        self._build_help()
+
+    def _build_cards(self) -> None:
+        self.cards_frame = ctk.CTkFrame(self.body_container, fg_color="transparent")
+        self.cards_frame.grid(row=0, column=0, sticky="nsew", pady=(0, config.SPACING_XL))
+        self.cards_frame.grid_columnconfigure(0, weight=1)
+        self.cards_frame.grid_columnconfigure(1, weight=1)
+
+        self._cards_grid_inited = False
+        self._last_card_columns: Optional[int] = None
+        self._report_defs = [dict(item) for item in self.CARD_DEFINITIONS]
+        self._refresh_cards()
+        self._cards_grid_inited = True
+        self._last_card_columns = self._card_columns()
+
+    def _build_recent(self) -> None:
+        self.recent_frame = ctk.CTkFrame(self.body_container, fg_color="transparent")
+        self.recent_frame.grid(row=1, column=0, sticky="ew", pady=(0, config.SPACING_XL))
+
+        header = ctk.CTkFrame(self.recent_frame, fg_color="transparent")
+        header.pack(fill="x", pady=(0, config.SPACING_SM))
+        ctk.CTkLabel(
+            header, text="Recently Opened Reports",
+            font=ctk.CTkFont(size=15, weight="bold"),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            header, text="Reports opened in the current company",
+            font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_MUTED,
+        ).pack(side="left", padx=(config.SPACING_SM, 0))
+
+        self.recent_panel = ctk.CTkFrame(
+            self.recent_frame, fg_color=config.COLOR_BG_SECONDARY,
+            corner_radius=config.CARD_CORNER_RADIUS, border_width=1,
+            border_color=config.COLOR_CARD_BORDER,
+        )
+        self.recent_panel.pack(fill="x")
+
+        self._refresh_recent()
+
+    def _build_help(self) -> None:
+        self.help_frame = ctk.CTkFrame(self.body_container, fg_color="transparent")
+        self.help_frame.grid(row=2, column=0, sticky="ew")
+
+        ctk.CTkLabel(
+            self.help_frame, text="How to use Reports",
+            font=ctk.CTkFont(size=15, weight="bold"),
+        ).pack(anchor="w", pady=(0, config.SPACING_SM))
+
+        self.help_panel = ctk.CTkFrame(
+            self.help_frame, fg_color=config.COLOR_BG_SECONDARY,
+            corner_radius=config.CARD_CORNER_RADIUS, border_width=1,
+            border_color=config.COLOR_CARD_BORDER,
+        )
+        self.help_panel.pack(fill="x")
+
+        self.help_panel.grid_columnconfigure(0, weight=1)
+        self.help_panel.grid_columnconfigure(1, weight=1)
+
+        steps = ctk.CTkFrame(self.help_panel, fg_color="transparent")
+        steps.grid(row=0, column=0, sticky="nw", padx=config.SPACING_LG, pady=config.SPACING_LG)
+        ctk.CTkLabel(
+            steps, text="1. Select any report from the list.", font=ctk.CTkFont(size=12),
+            text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+        ).pack(anchor="w", pady=(0, 2))
+        ctk.CTkLabel(
+            steps, text="2. Set filters / date range in the report.", font=ctk.CTkFont(size=12),
+            text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+        ).pack(anchor="w", pady=(0, 2))
+        ctk.CTkLabel(
+            steps, text="3. View the results on screen.", font=ctk.CTkFont(size=12),
+            text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+        ).pack(anchor="w", pady=(0, 2))
+        ctk.CTkLabel(
+            steps, text="4. Export or print the report if available.", font=ctk.CTkFont(size=12),
+            text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+        ).pack(anchor="w")
+
+        tip = ctk.CTkFrame(self.help_panel, fg_color="transparent")
+        tip.grid(row=0, column=1, sticky="nw", padx=config.SPACING_LG, pady=config.SPACING_LG)
+        ctk.CTkLabel(
+            tip, text="Tip", font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLOR_PRIMARY, anchor="w",
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            tip, text="You can also use shortcuts.", font=ctk.CTkFont(size=12),
+            text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+        ).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(
+            tip, text="F5  Refresh", font=ctk.CTkFont(size=12),
+            text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+        ).pack(anchor="w", pady=(0, 2))
+        ctk.CTkLabel(
+            tip, text="Esc  Back", font=ctk.CTkFont(size=12),
+            text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+        ).pack(anchor="w")
+
+    def _build_shortcut_bar(self) -> None:
+        self.shortcut_bar = ctk.CTkFrame(
+            self.main_frame, fg_color=config.COLOR_BG_SECONDARY,
+            corner_radius=config.CARD_CORNER_RADIUS, border_width=1,
+            border_color=config.COLOR_CARD_BORDER,
+        )
+        self.shortcut_bar.pack(fill="x", pady=(config.SPACING_LG, 0))
+
+        ctk.CTkLabel(
+            self.shortcut_bar, text="SHORTCUTS (THIS SCREEN)", font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=config.COLOR_TEXT_MUTED,
+        ).pack(side="left", padx=config.SPACING_LG)
+
+        self.shortcut_bar_body = ctk.CTkFrame(self.shortcut_bar, fg_color="transparent")
+        self.shortcut_bar_body.pack(side="left", padx=config.SPACING_MD)
+
+        self._shortcut_refresh_btn = ctk.CTkButton(
+            self.shortcut_bar_body, text="F5  Refresh", width=110, height=28,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            command=self.on_keyboard_refresh,
+        )
+        self._shortcut_refresh_btn.pack(side="left", padx=(0, config.SPACING_XS))
+        self._shortcut_search_btn = ctk.CTkButton(
+            self.shortcut_bar_body, text="Ctrl+F  Search", width=120, height=28,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            command=self._focus_search_entry,
+        )
+        self._shortcut_search_btn.pack(side="left", padx=(0, config.SPACING_XS))
+        self._shortcut_back_btn = ctk.CTkButton(
+            self.shortcut_bar_body, text="Esc  Back", width=100, height=28,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            command=self._handle_back_shortcut,
+        )
+        self._shortcut_back_btn.pack(side="left")
+
+        ctk.CTkLabel(
+            self.shortcut_bar, text="Enter  Open Report", font=ctk.CTkFont(size=11),
+            text_color=config.COLOR_TEXT_MUTED,
+        ).pack(side="right", padx=config.SPACING_LG)
+
+    # ------------------------------------------------------------------ #
+    # report opening
+    # ------------------------------------------------------------------ #
+    def _open_report(self, opener: Callable[[tk.Widget, int], tk.Widget], report_name: str) -> None:
+        """Single click selects, double click / Enter opens.  The existing
+        report module is opened as-is; only a back button is added above it."""
         self._destroy_current_report()
+        self._select_report(report_name)
         report_ui = opener(self.parent, self.company_id)
         self.current_report_ui = report_ui
         self.current_frame = report_ui.main_frame
+        record_report_open(self.company_id, report_name, self._current_user())
         self._install_back_button(report_ui)
+
+    def _current_user(self) -> str:
+        try:
+            row = self._db_fetch_user()
+            return row or "Admin"
+        except Exception:
+            return "Admin"
+
+    def _db_fetch_user(self) -> Optional[str]:
+        from database.database import db
+        row = db.fetch_one("SELECT value FROM settings WHERE key = 'user_name'")
+        return str(row["value"]) if row else None
 
     def _destroy_current_report(self) -> None:
         if self.current_frame is not None:
@@ -52,7 +358,7 @@ class ReportsHubUI:
             self.current_frame = None
         self.current_report_ui = None
 
-    def _install_back_button(self, report_ui: tk.Widget) -> None:
+    def _install_back_button(self, report_ui) -> None:
         """Add a 'Back to Reports' button to a report screen's header."""
         try:
             main_frame = getattr(report_ui, "main_frame", None)
@@ -74,46 +380,316 @@ class ReportsHubUI:
     def _close_report(self) -> None:
         self._destroy_current_report()
 
-    def _build_header(self) -> None:
-        header = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        header.pack(fill="x", pady=(0, config.SPACING_LG))
-        ctk.CTkLabel(
-            header, text="Reports", font=ctk.CTkFont(size=config.FONT_TITLE_SIZE, weight="bold"),
-        ).pack(side="left")
-        ctk.CTkLabel(
-            header, text="Open a report module",
-            font=ctk.CTkFont(size=12), text_color=config.COLOR_TEXT_SECONDARY,
-        ).pack(side="left", padx=(config.SPACING_MD, 0))
+    # ------------------------------------------------------------------ #
+    # cards
+    # ------------------------------------------------------------------ #
+    def _clear_cards(self) -> None:
+        for child in self.cards_frame.winfo_children():
+            child.destroy()
+        self._card_widgets = {}
 
-    def _build_controls(self) -> None:
-        controls = ctk.CTkFrame(
-            self.main_frame, fg_color=config.COLOR_BG_SECONDARY,
-            corner_radius=config.CARD_CORNER_RADIUS,
+    def _available_card_width(self) -> int:
+        """Usable width for the card grid (inside padding / scrollbar)."""
+        try:
+            return max(self.cards_frame.winfo_width(), 0)
+        except Exception:
+            return 0
+
+    def _card_columns(self) -> int:
+        """Responsive column count: 2 columns when they fit, otherwise 1."""
+        width = self._available_card_width()
+        if width <= 0:
+            return 2
+        # Each card needs ~340px; two columns with 16px gutters need ~700px.
+        return 2 if width >= 700 else 1
+
+    def _refresh_cards(self, *args) -> None:
+        self._clear_cards()
+        search_term = self.search_var.get().strip().lower()
+        filtered = [
+            item for item in self._report_defs
+            if search_term in item["title"].lower() or search_term in item["subtitle"].lower()
+        ]
+
+        columns = self._card_columns()
+        for column in range(columns):
+            self.cards_frame.grid_columnconfigure(column, weight=1)
+        for column in range(columns, 3):
+            self.cards_frame.grid_columnconfigure(column, weight=0)
+
+        if not filtered:
+            ctk.CTkLabel(
+                self.cards_frame,
+                text="No matching reports found.",
+                font=ctk.CTkFont(size=14),
+                text_color=config.COLOR_TEXT_MUTED,
+            ).grid(row=0, column=0, columnspan=columns, sticky="ew", pady=config.SPACING_XL)
+            return
+
+        for index, item in enumerate(filtered):
+            row = index // columns
+            column = index % columns
+            card = self._create_card(self.cards_frame, item)
+            card.grid(row=row, column=column, sticky="ew", padx=config.SPACING_SM,
+                      pady=config.SPACING_SM)
+            self._card_widgets[item["title"]] = card
+            self.cards_frame.grid_rowconfigure(row, weight=0)
+
+        # Re-apply the keyboard-driven selection state.
+        if self.selected_title in self._card_widgets:
+            self._set_card_selected(self._card_widgets[self.selected_title], True)
+
+    def _create_card(self, parent, item: Dict[str, object]) -> ctk.CTkFrame:
+        card = ctk.CTkFrame(
+            parent, fg_color=config.COLOR_BG_SECONDARY,
+            corner_radius=config.CARD_CORNER_RADIUS, height=78,
+            border_width=1, border_color=config.COLOR_CARD_BORDER,
         )
-        controls.pack(fill="x", pady=(0, config.SPACING_LG))
-        row = ctk.CTkFrame(controls, fg_color="transparent")
-        row.pack(fill="x", padx=config.SPACING_LG, pady=config.SPACING_MD)
-        ctk.CTkLabel(row, text="Search", font=ctk.CTkFont(size=12)).pack(side="left")
-        self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", self._refresh_cards)
-        self.search_entry = ctk.CTkEntry(
-            row, textvariable=self.search_var, width=260,
-            corner_radius=config.INPUT_CORNER_RADIUS,
+        card.pack_propagate(False)
+        card.grid_propagate(False)
+        card.grid_columnconfigure(1, weight=1)
+
+        icon = ctk.CTkLabel(
+            card, text=str(item["icon"]), font=ctk.CTkFont(size=22),
+            text_color=config.COLOR_PRIMARY, width=40,
         )
-        self.search_entry.pack(side="left", padx=(config.SPACING_SM, config.SPACING_MD))
+        icon.grid(row=0, column=0, rowspan=2, sticky="w",
+                  padx=config.SPACING_LG, pady=config.SPACING_MD)
+
+        text_col = ctk.CTkFrame(card, fg_color="transparent")
+        text_col.grid(row=0, column=1, rowspan=2, sticky="ew", pady=config.SPACING_MD)
+        text_col.grid_columnconfigure(0, weight=1)
+
         ctk.CTkLabel(
-            row, text="Open a report module",
-            font=ctk.CTkFont(size=12), text_color=config.COLOR_TEXT_MUTED,
-        ).pack(side="right")
+            text_col, text=str(item["title"]), font=ctk.CTkFont(size=14, weight="bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            text_col, text=str(item["subtitle"]), font=ctk.CTkFont(size=12),
+            text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        arrow = ctk.CTkLabel(
+            card, text=">", font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=config.COLOR_TEXT_MUTED,
+        )
+        arrow.grid(row=0, column=2, rowspan=2, sticky="e", padx=config.SPACING_LG)
+
+        title = str(item["title"])
+        card.bind("<Enter>", lambda _e, c=card: self._on_card_hover(c, True))
+        card.bind("<Leave>", lambda _e, c=card: self._on_card_hover(c, False))
+        card.bind("<Button-1>", lambda _e, t=title: self._on_card_click(t))
+        card.bind("<Double-Button-1>", lambda _e, t=title: self._on_card_double_click(t))
+        card.bind("<Return>", lambda _e, t=title: self._on_card_enter(t))
+        for child in (icon, text_col, arrow):
+            child.bind("<Button-1>", lambda _e, t=title: self._on_card_click(t), add="+")
+        card._report_title = title
+
+        return card
+
+    def _bind_card_keyboard(self) -> None:
+        self.cards_frame.bind("<Up>", self._on_card_arrow)
+        self.cards_frame.bind("<Down>", self._on_card_arrow)
+        self.cards_frame.bind("<Left>", self._on_card_arrow)
+        self.cards_frame.bind("<Right>", self._on_card_arrow)
+        self.cards_frame.bind("<Return>", self._on_cards_enter)
+        # Responsive grid: re-flow the cards when the body width changes.
+        self.cards_frame.bind("<Configure>", self._on_cards_resize)
+
+    def _on_cards_resize(self, _event=None) -> None:
+        """Re-flow the card grid when the available width crosses the
+        single/two-column threshold (never clip the right column)."""
+        if not getattr(self, "_cards_grid_inited", False):
+            return
+        old = getattr(self, "_last_card_columns", None)
+        new = self._card_columns()
+        if old is not None and new != old:
+            self._last_card_columns = new
+            self._refresh_cards()
+        elif old is None:
+            self._last_card_columns = new
+
+    # ------------------------------------------------------------------ #
+    # card interactions (single click selects, Enter/double click opens)
+    # ------------------------------------------------------------------ #
+    def _visible_titles(self) -> List[str]:
+        return list(self._card_widgets.keys())
+
+    def _on_card_hover(self, card, hovering: bool) -> None:
+        if hovering and card is not self._selected_card:
+            try:
+                card.configure(border_color=config.COLOR_PRIMARY)
+            except Exception:
+                pass
+        else:
+            if card is not self._selected_card:
+                try:
+                    card.configure(border_color=config.COLOR_CARD_BORDER)
+                except Exception:
+                    pass
+
+    def _set_card_selected(self, card, selected: bool) -> None:
+        try:
+            if selected:
+                card.configure(border_color=config.COLOR_PRIMARY, border_width=2)
+            else:
+                card.configure(border_color=config.COLOR_CARD_BORDER, border_width=1)
+        except Exception:
+            pass
+
+    def _select_report(self, title: str) -> None:
+        self.selected_title = title
+        if self._selected_card is not None:
+            self._set_card_selected(self._selected_card, False)
+        self._selected_card = self._card_widgets.get(title)
+        if self._selected_card is not None:
+            self._set_card_selected(self._selected_card, True)
+
+    def _on_card_click(self, title: str) -> None:
+        self._select_report(title)
+
+    def _on_card_double_click(self, title: str) -> None:
+        item = self._report_by_title(title)
+        if item:
+            item["open"](self)
+
+    def _on_card_enter(self, title: str) -> None:
+        self._select_report(title)
+        item = self._report_by_title(title)
+        if item:
+            item["open"](self)
+
+    def _on_cards_enter(self, _event=None) -> str:
+        if self.selected_title and self.selected_title in self._card_widgets:
+            item = self._report_by_title(self.selected_title)
+            if item:
+                item["open"](self)
+        return "break"
+
+    def _on_card_arrow(self, event) -> str:
+        titles = self._visible_titles()
+        if not titles:
+            return "break"
+        if self.selected_title in titles:
+            index = titles.index(self.selected_title)
+        else:
+            index = -1
+        columns = self._card_columns()
+        if event.keysym == "Down":
+            index += columns
+        elif event.keysym == "Up":
+            index -= columns
+        elif event.keysym == "Right":
+            index += 1
+        elif event.keysym == "Left":
+            index -= 1
+        else:
+            return "break"
+        if index < 0 or index >= len(titles):
+            return "break"
+        self._select_report(titles[index])
+        self.cards_frame.focus_set()
+        return "break"
+
+    def _report_by_title(self, title: str) -> Optional[Dict[str, object]]:
+        for item in self._report_defs:
+            if item["title"] == title:
+                return item
+        return None
+
+    # ------------------------------------------------------------------ #
+    # recently opened
+    # ------------------------------------------------------------------ #
+    def _refresh_recent(self) -> None:
+        for child in self.recent_panel.winfo_children():
+            child.destroy()
+
+        entries = recent_reports(self.company_id)
+        if not entries:
+            ctk.CTkLabel(
+                self.recent_panel, text="No reports opened yet in this company.",
+                font=ctk.CTkFont(size=12), text_color=config.COLOR_TEXT_MUTED,
+                anchor="w",
+            ).pack(anchor="w", padx=config.SPACING_LG, pady=config.SPACING_LG)
+            return
+
+        for entry in entries:
+            row = ctk.CTkFrame(self.recent_panel, fg_color="transparent")
+            row.pack(fill="x")
+            self.recent_panel.grid_columnconfigure(0, weight=1)
+
+            title = str(entry.get("report_name", ""))
+            opened_at = str(entry.get("opened_at", ""))
+            opened_by = str(entry.get("opened_by", "Admin"))
+            try:
+                opened_at = datetime.strptime(opened_at, config.DB_DATETIME_FORMAT).strftime(
+                    config.DISPLAY_DATE_FORMAT + " " + config.TIME_DISPLAY_FORMAT)
+            except Exception:
+                opened_at = opened_at
+
+            item = self._report_by_title(title)
+
+            def _open_recent(t=title):
+                entry_def = self._report_by_title(t)
+                if entry_def:
+                    entry_def["open"](self)
+
+            ctk.CTkLabel(
+                row, text=title, font=ctk.CTkFont(size=12, weight="bold"), anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=config.SPACING_LG, pady=config.SPACING_MD)
+            ctk.CTkLabel(
+                row, text=opened_at, font=ctk.CTkFont(size=12),
+                text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+            ).grid(row=0, column=1, sticky="e")
+            ctk.CTkLabel(
+                row, text=opened_by, font=ctk.CTkFont(size=12),
+                text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+            ).grid(row=0, column=2, sticky="e", padx=config.SPACING_LG)
+            ctk.CTkButton(
+                row, text="Open", width=70, height=26,
+                corner_radius=config.BUTTON_CORNER_RADIUS, command=_open_recent,
+            ).grid(row=0, column=3, sticky="e", padx=config.SPACING_LG, pady=config.SPACING_SM)
+
+            row.grid_columnconfigure(0, weight=1)
+            row.grid_columnconfigure(1, weight=0)
+            row.grid_columnconfigure(2, weight=0)
+            row.grid_columnconfigure(3, weight=0)
+
+    # ------------------------------------------------------------------ #
+    # keyboard shortcuts
+    # ------------------------------------------------------------------ #
+    def _focus_search_entry(self) -> None:
+        try:
+            self.search_entry.focus_set()
+        except Exception:
+            pass
+
+    def _on_advanced_report(self) -> None:
+        """The app's report registry is this hub; focusing the search is the
+        equivalent 'advanced' entry point (no fake backend is invented)."""
+        self._focus_search_entry()
+        self.search_entry.select_range(0, "end")
+
+    def _on_ctrl_f(self, _event=None) -> str:
+        self._focus_search_entry()
+        return "break"
 
     def on_keyboard_back(self) -> None:
-        """Esc on the hub (no report open) returns to the previous screen."""
+        """Esc: with a report open, close it and return to the hub; with no
+        report open, return to the previous top-level screen (never quits)."""
+        if self.current_frame is not None:
+            self._close_report()
+            return
         try:
             app = self.winfo_toplevel()
             if hasattr(app, "on_keyboard_back"):
                 app.on_keyboard_back()
         except Exception:
             pass
+
+    def _handle_back_shortcut(self) -> None:
+        """The Esc / back button on this screen behaves exactly like Esc."""
+        self.on_keyboard_back()
 
     def _forward(self, method_name: str):
         """Forward a shortcut to the currently open report UI if any."""
@@ -123,7 +699,6 @@ class ReportsHubUI:
         method = getattr(ui, method_name, None)
         if callable(method):
             return method
-        # Fall back to common report conventions.
         fallbacks = {
             "on_keyboard_refresh": "_generate_report",
             "on_keyboard_search": "_focus_search",
@@ -152,139 +727,14 @@ class ReportsHubUI:
         else:
             # Refresh the hub itself.
             self._refresh_cards()
+            self._refresh_recent()
 
     def on_keyboard_search(self) -> None:
         method = self._forward("on_keyboard_search")
         if method:
             method()
         else:
-            from utils.keyboard import _focus_search
-            _focus_search(self)
-
-    def _build_cards(self) -> None:
-        self.cards_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        self.cards_frame.pack(fill="both", expand=True)
-
-        self.card_definitions = [
-            {
-                "title": "Day Book",
-                "subtitle": "Voucher register",
-                "icon": "▤",
-                "open": lambda: self._open_report(show_day_book_report),
-            },
-            {
-                "title": "Cash Book",
-                "subtitle": "Cash movement",
-                "icon": "₹",
-                "open": lambda: self._open_report(show_cash_book_report),
-            },
-            {
-                "title": "Bank Book",
-                "subtitle": "Bank movement",
-                "icon": "▨",
-                "open": lambda: self._open_report(show_bank_book_report),
-            },
-            {
-                "title": "Party Ledger",
-                "subtitle": "Party-wise ledger and summary",
-                "icon": "▥",
-                "open": lambda: self._open_report(show_party_ledger_report),
-            },
-            {
-                "title": "Account Book",
-                "subtitle": "Account statement view",
-                "icon": "▦",
-                "open": lambda: self._open_report(show_account_book_report),
-            },
-            {
-                "title": "Outstanding Report",
-                "subtitle": "Receivables and payables overview",
-                "icon": "▧",
-                "open": lambda: self._open_report(show_outstanding_report),
-            },
-            {
-                "title": "Ageing Report",
-                "subtitle": "Ageing buckets and overdue analysis",
-                "icon": "◔",
-                "open": lambda: self._open_report(show_ageing_report),
-            },
-            {
-                "title": "Trial Balance",
-                "subtitle": "Debit and credit balances",
-                "icon": "▤",
-                "open": lambda: self._open_report(show_trial_balance_report),
-            },
-            {
-                "title": "Balance Sheet",
-                "subtitle": "Assets = Liabilities + Capital",
-                "icon": "▦",
-                "open": lambda: self._open_report(show_balance_sheet_report),
-            },
-        ]
-
-        self._refresh_cards()
-
-    def _clear_cards(self) -> None:
-        for child in self.cards_frame.winfo_children():
-            child.destroy()
-
-    def _refresh_cards(self, *args) -> None:
-        self._clear_cards()
-        search_term = self.search_var.get().strip().lower()
-        filtered = [
-            item for item in self.card_definitions
-            if search_term in item["title"].lower() or search_term in item["subtitle"].lower()
-        ]
-
-        if not filtered:
-            ctk.CTkLabel(
-                self.cards_frame,
-                text="No matching reports found.",
-                font=ctk.CTkFont(size=14),
-                text_color=config.COLOR_TEXT_MUTED,
-            ).pack(pady=config.SPACING_XXL)
-            return
-
-        for index, item in enumerate(filtered):
-            row = index // 2
-            column = index % 2
-            card = self._create_card(self.cards_frame, item)
-            card.grid(row=row, column=column, sticky="nsew", padx=config.SPACING_SM,
-                      pady=config.SPACING_SM)
-
-        for column in range(2):
-            self.cards_frame.grid_columnconfigure(column, weight=1)
-        for row in range((len(filtered) + 1) // 2):
-            self.cards_frame.grid_rowconfigure(row, weight=1)
-
-    def _create_card(self, parent, item: Dict[str, str]) -> ctk.CTkFrame:
-        frame = ctk.CTkFrame(
-            parent, fg_color=config.COLOR_BG_SECONDARY,
-            corner_radius=config.CARD_CORNER_RADIUS,
-            border_width=1, border_color=config.COLOR_CARD_BORDER,
-        )
-        frame.grid_propagate(False)
-
-        ctk.CTkLabel(
-            frame, text=item["icon"], font=ctk.CTkFont(size=26),
-            text_color=config.COLOR_PRIMARY,
-        ).pack(anchor="w", padx=config.SPACING_LG, pady=(config.SPACING_XL, 0))
-        ctk.CTkLabel(
-            frame, text=item["title"], font=ctk.CTkFont(size=16, weight="bold"),
-        ).pack(anchor="w", padx=config.SPACING_LG, pady=(config.SPACING_SM, 0))
-        ctk.CTkLabel(
-            frame, text=item["subtitle"], font=ctk.CTkFont(size=12),
-            text_color=config.COLOR_TEXT_SECONDARY,
-        ).pack(anchor="w", padx=config.SPACING_LG, pady=(2, config.SPACING_LG))
-        open_handler = item.get("open")
-        if callable(open_handler):
-            ctk.CTkButton(
-                frame, text="Open", width=90, height=32,
-                corner_radius=config.BUTTON_CORNER_RADIUS,
-                command=open_handler,
-            ).pack(anchor="e", padx=config.SPACING_LG, pady=(0, config.SPACING_LG))
-
-        return frame
+            self._focus_search_entry()
 
 
 def show_reports(parent: tk.Widget, company_id: int) -> ReportsHubUI:

@@ -368,6 +368,17 @@ class Database:
             )
         """)
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS recent_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL,
+                report_name TEXT NOT NULL,
+                opened_by TEXT DEFAULT 'Admin',
+                opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(company_id, report_name),
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS transfers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 from_account_type TEXT NOT NULL CHECK(from_account_type IN ('Cash', 'Bank')),
