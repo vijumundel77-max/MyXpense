@@ -27,6 +27,7 @@ from ui.outstanding_report import show_outstanding_report
 from ui.ageing_report import show_ageing_report
 from ui.trial_balance_report import show_trial_balance_report
 from ui.balance_sheet_report import show_balance_sheet_report
+from ui.profit_loss_report import show_profit_loss_report
 
 
 class ReportsHubUI(ctk.CTkFrame):
@@ -103,6 +104,13 @@ class ReportsHubUI(ctk.CTkFrame):
             "icon": "▦",
             "open": lambda self: self._open_report(show_balance_sheet_report, "Balance Sheet"),
             "actions": ["Open", "Modify Filters", "Refresh", "Export", "Print"],
+        },
+        {
+            "title": "Profit & Loss",
+            "subtitle": "Income vs Expense, Net Profit/Loss",
+            "icon": "▣",
+            "open": lambda self: self._open_report(show_profit_loss_report, "Profit & Loss"),
+            "actions": ["Open", "Modify Filters", "Refresh", "Export"],
         },
     ]
 

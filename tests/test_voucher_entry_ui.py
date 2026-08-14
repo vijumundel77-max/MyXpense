@@ -31,9 +31,11 @@ from services.voucher_service import (  # noqa: E402
     VOUCHER_RECEIPT,
     VOUCHER_CONTRA,
     VOUCHER_JOURNAL,
+    VOUCHER_SALES,
+    VOUCHER_PURCHASE,
     STATUS_CANCELLED,
 )
-from ui.vouchers import VouchersFrame  # noqa: E402
+from ui.vouchers import VouchersFrame, VOUCHER_TYPE_LABELS  # noqa: E402
 from utils import theme  # noqa: E402
 
 
@@ -114,8 +116,10 @@ class VoucherEntryUITest(unittest.TestCase):
                                                 "Indirect Expense", 0.0, "Debit")
         sales = account_service.create_account(company_id, "Sales", "SALES",
                                                "Sales Accounts", 0.0, "Credit")
+        purchases = account_service.create_account(company_id, "Purchases", "PUR",
+                                                   "Purchase Accounts", 0.0, "Debit")
         return {"cash": cash, "bank": bank, "creditor": creditor, "debtor": debtor,
-                "rent": rent, "salary": salary, "sales": sales}
+                "rent": rent, "salary": salary, "sales": sales, "purchases": purchases}
 
     # ------------------------------------------------------------------ #
     # screen opening + header
@@ -458,6 +462,205 @@ class VoucherEntryUITest(unittest.TestCase):
         self.ui.on_keyboard_back = lambda: calls.append("back")
         self.ui.on_keyboard_back()
         self.assertEqual(calls, ["back"])
+
+    # ------------------------------------------------------------------ #
+    # 6-voucher type selector (segmented button) + F4-F9 hotkeys
+    # ------------------------------------------------------------------ #
+    def test_segmented_selector_shows_all_six_types(self):
+        texts = "\n".join(_all_text(self.ui.main_frame))
+        for label in VOUCHER_TYPE_LABELS.values():
+            self.assertIn(label, texts)
+
+    def test_type_var_holds_raw_voucher_type(self):
+        self.assertEqual(self.ui.type_var.get(), VOUCHER_PAYMENT)
+
+    def test_switch_voucher_type_updates_flow(self):
+        self.ui._switch_voucher_type(VOUCHER_SALES)
+        self._sync()
+        self.assertEqual(self.ui.type_var.get(), VOUCHER_SALES)
+        self.assertIn("Sales", self.ui.flow_hint.cget("text"))
+        self.assertEqual(self.ui.party_side, "debit")
+
+        self.ui._switch_voucher_type(VOUCHER_PURCHASE)
+        self._sync()
+        self.assertEqual(self.ui.type_var.get(), VOUCHER_PURCHASE)
+        self.assertIn("Purchase", self.ui.flow_hint.cget("text"))
+        self.assertEqual(self.ui.party_side, "credit")
+
+        self.ui._switch_voucher_type(VOUCHER_CONTRA)
+        self._sync()
+        self.assertEqual(self.ui.type_var.get(), VOUCHER_CONTRA)
+        self.assertIsNone(self.ui.party_side)
+
+        self.ui._switch_voucher_type(VOUCHER_JOURNAL)
+        self._sync()
+        self.assertEqual(self.ui.type_var.get(), VOUCHER_JOURNAL)
+        self.assertIsNone(self.ui.party_side)
+
+    def test_f4_to_f9_switch_types(self):
+        for key, vtype in [("<F4>", VOUCHER_CONTRA), ("<F5>", VOUCHER_PAYMENT),
+                           ("<F6>", VOUCHER_RECEIPT), ("<F7>", VOUCHER_JOURNAL),
+                           ("<F8>", VOUCHER_SALES), ("<F9>", VOUCHER_PURCHASE)]:
+            # The hotkeys are bound on the toplevel (whose bindtag fires for
+            # every descendant), so generate the event on the root window.
+            self.root.event_generate(key, when="now")
+            self._sync()
+            self.assertEqual(self.ui.type_var.get(), vtype,
+                             f"{key} did not switch to {vtype}")
+
+    def test_ctrl_a_saves(self):
+        self._fill_payment()
+        with mock.patch.object(self.ui, "_save_voucher") as save:
+            self.ui._on_hotkey_save()
+        save.assert_called_once()
+
+    def test_ctrl_a_handler_returns_break(self):
+        self.assertEqual(self.ui._on_hotkey_save(), "break")
+
+    # ------------------------------------------------------------------ #
+    # per-type ledger filtering in the row pickers
+    # ------------------------------------------------------------------ #
+    def _picker_group_names(self):
+        names = set()
+        for row in self.ui.rows:
+            names.update(a.get('account_group', '') for a in row["picker"].results)
+        return names
+
+    def test_contra_picker_shows_only_cash_bank(self):
+        self.ui._switch_voucher_type(VOUCHER_CONTRA)
+        self._sync()
+        groups = self._picker_group_names()
+        self.assertTrue(groups)
+        self.assertLessEqual(groups, {"Cash-in-Hand", "Bank Accounts"})
+
+    def test_journal_picker_excludes_cash_bank(self):
+        self.ui._switch_voucher_type(VOUCHER_JOURNAL)
+        self._sync()
+        groups = self._picker_group_names()
+        self.assertNotIn("Cash-in-Hand", groups)
+        self.assertNotIn("Bank Accounts", groups)
+        # Non-cash ledgers are still available.
+        self.assertIn("Sundry Debtors", groups)
+
+    def test_payment_picker_has_all_ledgers(self):
+        self.ui._switch_voucher_type(VOUCHER_PAYMENT)
+        self._sync()
+        groups = self._picker_group_names()
+        self.assertIn("Cash-in-Hand", groups)
+        self.assertIn("Sundry Creditors", groups)
+
+    # ------------------------------------------------------------------ #
+    # party side for Sales / Purchase
+    # ------------------------------------------------------------------ #
+    def test_sales_party_goes_to_debit_side(self):
+        self.ui._switch_voucher_type(VOUCHER_SALES)
+        self.ui.party_picker.set_account(self.acct["debtor"])
+        self.ui._on_party_selected()
+        self._sync()
+        debit_row = [r for r in self.ui.rows if not r.get("to_line")][0]
+        self.assertEqual(debit_row["picker"].get_account(), self.acct["debtor"])
+
+    def test_purchase_party_goes_to_credit_side(self):
+        self.ui._switch_voucher_type(VOUCHER_PURCHASE)
+        self.ui.party_picker.set_account(self.acct["creditor"])
+        self.ui._on_party_selected()
+        self._sync()
+        credit_row = [r for r in self.ui.rows if r.get("to_line")][0]
+        self.assertEqual(credit_row["picker"].get_account(), self.acct["creditor"])
+
+    def test_sales_voucher_saves_via_ui(self):
+        self.ui._switch_voucher_type(VOUCHER_SALES)
+        self._sync()
+        debit_row = [r for r in self.ui.rows if not r.get("to_line")][0]
+        credit_row = [r for r in self.ui.rows if r.get("to_line")][0]
+        debit_row["picker"].set_account(self.acct["debtor"])
+        credit_row["picker"].set_account(self.acct["sales"])
+        debit_row["debit_var"].set("6000")
+        credit_row["credit_var"].set("6000")
+        self.ui.narration_var.set("Sales to Customer A")
+        self.ui._save_voucher()
+        self._sync()
+        vouchers = voucher_service.list_vouchers(1, voucher_type=VOUCHER_SALES)
+        self.assertEqual(len(vouchers), 1)
+        self.assertEqual(vouchers[0]["voucher_number"], "SV-0001")
+
+    def test_purchase_voucher_saves_via_ui(self):
+        self.ui._switch_voucher_type(VOUCHER_PURCHASE)
+        self._sync()
+        debit_row = [r for r in self.ui.rows if not r.get("to_line")][0]
+        credit_row = [r for r in self.ui.rows if r.get("to_line")][0]
+        debit_row["picker"].set_account(self.acct["purchases"])
+        credit_row["picker"].set_account(self.acct["creditor"])
+        debit_row["debit_var"].set("9000")
+        credit_row["credit_var"].set("9000")
+        self.ui.narration_var.set("Purchase from Supplier X")
+        self.ui._save_voucher()
+        self._sync()
+        vouchers = voucher_service.list_vouchers(1, voucher_type=VOUCHER_PURCHASE)
+        self.assertEqual(len(vouchers), 1)
+        self.assertEqual(vouchers[0]["voucher_number"], "PC-0001")
+
+    # ------------------------------------------------------------------ #
+    # add-new-ledger modal
+    # ------------------------------------------------------------------ #
+    def test_add_ledger_modal_creates_ledger(self):
+        before = {a["name"] for a in account_service.list_accounts(1)}
+        self.ui._add_ledger_modal()
+        self._sync()
+        modal = getattr(self.ui, "_ledger_modal", None)
+        self.assertIsNotNone(modal)
+        self.assertTrue(modal.winfo_exists())
+
+        # Fill the modal's fields and create.
+        name_entry = None
+        group_combo = None
+
+        def _walk(widget):
+            nonlocal name_entry, group_combo
+            for child in widget.winfo_children():
+                if isinstance(child, ctk.CTkEntry) and name_entry is None:
+                    name_entry = child
+                if isinstance(child, ctk.CTkComboBox) and group_combo is None:
+                    group_combo = child
+                _walk(child)
+
+        _walk(modal)
+        self.assertIsNotNone(name_entry)
+        name_entry.insert(0, "Telephone Charges")
+        # Pick the second combo (Balance Type) values via the first combo
+        # (Group) — set a known group.
+        values = group_combo.cget("values")
+        self.assertTrue(values)
+        group_combo.set(values[0])
+
+        # Trigger the create button.
+        create_btn = None
+
+        def _find_create(widget):
+            nonlocal create_btn
+            for child in widget.winfo_children():
+                if isinstance(child, ctk.CTkButton) and child.cget("text") == "Create":
+                    create_btn = child
+                _find_create(child)
+
+        _find_create(modal)
+        self.assertIsNotNone(create_btn)
+        create_btn.invoke()
+        self._sync()
+
+        after = {a["name"] for a in account_service.list_accounts(1)}
+        self.assertIn("Telephone Charges", after - before)
+        # Modal closed after creation.
+        try:
+            self.assertFalse(modal.winfo_exists())
+        except Exception:
+            pass
+
+    def test_ledger_picker_has_add_new_button(self):
+        row_picker = self.ui.rows[0]["picker"]
+        self.assertIsNotNone(row_picker.on_add_new)
+        # The '+ New' button is visible.
+        self.assertNotEqual(row_picker.new_btn.winfo_manager(), "")
 
     # ------------------------------------------------------------------ #
     # voucher register (one row per voucher, grouped Dr/Cr lines)

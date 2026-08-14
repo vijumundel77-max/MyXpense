@@ -32,6 +32,7 @@ from utils import theme  # noqa: E402
 REPORT_TITLES = [
     "Day Book", "Cash Book", "Bank Book", "Party Ledger", "Account Book",
     "Outstanding Report", "Ageing Report", "Trial Balance", "Balance Sheet",
+    "Profit & Loss",
 ]
 
 
@@ -121,7 +122,7 @@ class ReportsHubTest(unittest.TestCase):
     # ------------------------------------------------------------------ #
     def test_hub_opens(self):
         self.assertIsInstance(self.hub, ReportsHubUI)
-        self.assertEqual(len(self.hub._card_widgets), 9)
+        self.assertEqual(len(self.hub._card_widgets), 10)
 
     def test_all_existing_report_cards_present(self):
         titles = list(self.hub._card_widgets.keys())
@@ -162,7 +163,7 @@ class ReportsHubTest(unittest.TestCase):
         self.assertEqual(len(self.hub._card_widgets), 1)
         self.hub.search_var.set("")
         self._sync()
-        self.assertEqual(len(self.hub._card_widgets), 9)
+        self.assertEqual(len(self.hub._card_widgets), 10)
 
     def test_search_no_match_shows_message(self):
         self.hub.search_var.set("zzz-no-such-report")
@@ -426,6 +427,13 @@ class ReportsHubTest(unittest.TestCase):
         self.hub.on_keyboard_search()
         self._sync()
         focused = self.root.focus_get()
+        # Under a loaded full-suite run the root window may not be mapped yet
+        # (focus_get() == None); give it a couple of update cycles before
+        # asserting, since the mapping is asynchronous.
+        if focused is None:
+            for _ in range(4):
+                self._sync()
+            focused = self.root.focus_get()
         self.assertTrue(
             focused == ui.search_entry or focused in ui.search_entry.winfo_children(),
             f"expected report search focus, got {focused}",
@@ -863,7 +871,7 @@ class ReportsHubTest(unittest.TestCase):
             theme.apply_theme(self.root, mode=mode)
             theme.apply_palette(self.root)
             self._sync()
-        self.assertEqual(len(self.hub._card_widgets), 9)
+        self.assertEqual(len(self.hub._card_widgets), 10)
 
     def test_theme_toggle_keeps_recent_section(self):
         for mode in ("light", "dark"):

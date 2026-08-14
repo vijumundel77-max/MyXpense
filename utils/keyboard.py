@@ -151,6 +151,14 @@ def install_shortcuts(root: tk.Misc, get_view: Callable[[], Any]) -> None:
             save()
         return "break"
 
+    def _on_ctrl_a(_event=None) -> str:
+        # Ctrl+A: save (Tally-style "A" for Accept).  Falls back to the same
+        # save dispatch as Ctrl+S.
+        save = _find_save_method(get_view())
+        if save:
+            save()
+        return "break"
+
     def _on_ctrl_n(_event=None) -> str:
         new = _find_new_method(get_view())
         if new:
@@ -220,6 +228,8 @@ def install_shortcuts(root: tk.Misc, get_view: Callable[[], Any]) -> None:
     for seq, handler in [
         ("<Control-s>", _on_ctrl_s),
         ("<Control-S>", _on_ctrl_s),
+        ("<Control-a>", _on_ctrl_a),
+        ("<Control-A>", _on_ctrl_a),
         ("<Control-n>", _on_ctrl_n),
         ("<Control-N>", _on_ctrl_n),
         ("<Control-f>", _on_ctrl_f),
