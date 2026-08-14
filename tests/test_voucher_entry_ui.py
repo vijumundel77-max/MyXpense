@@ -460,7 +460,7 @@ class VoucherEntryUITest(unittest.TestCase):
         self.assertEqual(calls, ["back"])
 
     # ------------------------------------------------------------------ #
-    # voucher register (existing list preserved)
+    # voucher register (one row per voucher, grouped Dr/Cr lines)
     # ------------------------------------------------------------------ #
     def test_register_lists_vouchers(self):
         self._fill_payment()
@@ -469,6 +469,7 @@ class VoucherEntryUITest(unittest.TestCase):
         self.ui._open_register()
         self._sync()
         children = self.ui.register_tree.get_children()
+        # One voucher (with its two Dr/Cr lines grouped) -> one row.
         self.assertEqual(len(children), 1)
         self.assertEqual(self.ui.register_tree.item(children[0], "values")[0], "PV-0001")
         self.ui._close_register()
@@ -486,6 +487,155 @@ class VoucherEntryUITest(unittest.TestCase):
         self.assertIsNotNone(self.ui.current_voucher_id)
         self.assertIn("Editing", self.ui.mode_label.cget("text"))
         self.assertFalse(self.ui._register_open)
+
+    # ------------------------------------------------------------------ #
+    # register amount presentation: one amount per voucher, colour by direction
+    # ------------------------------------------------------------------ #
+    def _save_payment_and_open_register(self, amount=25000.0):
+        self._fill_payment(amount=amount)
+        self.ui._save_voucher()
+        self._sync()
+        self.ui._open_register()
+        self._sync()
+        return self.ui.register_tree.get_children()
+
+    def test_register_columns_one_row_per_voucher(self):
+        children = self._save_payment_and_open_register()
+        self.assertEqual(len(children), 1)
+        values = self.ui.register_tree.item(children[0], "values")
+        self.assertEqual(len(values), 5)
+        # Voucher No. | Type | Date | Particulars | Amount
+        self.assertEqual(values[0], "PV-0001")
+        self.assertEqual(values[1], "Payment")
+        self.assertTrue(values[4], "amount missing")
+
+    def test_register_amount_shown_once(self):
+        children = self._save_payment_and_open_register(3000.0)
+        values = self.ui.register_tree.item(children[0], "values")
+        # Amount appears exactly once, in the single Amount column.
+        self.assertEqual(values[4], "3,000.00")
+        amount_cells = [c for c in values if c and "," in str(c)]
+        self.assertEqual(len(amount_cells), 1)
+
+    def test_payment_amount_is_red(self):
+        children = self._save_payment_and_open_register()
+        row = children[0]
+        self.assertIn("out", self.ui.register_tree.item(row, "tags"))
+        color = str(self.ui.register_tree.tag_configure("out", "foreground"))
+        self.assertIn(config.COLOR_EXPENSE.lower(), color.lower())
+
+    def test_receipt_amount_is_green(self):
+        self.ui.on_keyboard_new()
+        self.ui.type_var.set(VOUCHER_RECEIPT)
+        self.ui._on_type_changed()
+        self._sync()
+        debit_row = [r for r in self.ui.rows if not r.get("to_line")][0]
+        credit_row = [r for r in self.ui.rows if r.get("to_line")][0]
+        debit_row["picker"].set_account(self.acct["cash"])
+        credit_row["picker"].set_account(self.acct["debtor"])
+        debit_row["debit_var"].set("500")
+        credit_row["credit_var"].set("500")
+        self.ui._save_voucher()
+        self._sync()
+        self.ui._open_register()
+        self._sync()
+        children = self.ui.register_tree.get_children()
+        self.assertEqual(len(children), 1)
+        row = children[0]
+        self.assertIn("in", self.ui.register_tree.item(row, "tags"))
+        color = str(self.ui.register_tree.tag_configure("in", "foreground"))
+        self.assertIn(config.COLOR_INCOME.lower(), color.lower())
+
+    def test_amount_not_duplicated(self):
+        children = self._save_payment_and_open_register(12345.0)
+        # One row, one amount — never duplicated into two columns.
+        self.assertEqual(len(children), 1)
+        values = self.ui.register_tree.item(children[0], "values")
+        self.assertEqual(values[4], "12,345.00")
+
+    def test_register_uses_existing_accounting_values(self):
+        """The register renders the saved voucher_details amounts unchanged."""
+        children = self._save_payment_and_open_register(7777.0)
+        voucher_id = int(children[0])
+        details = voucher_service.get_voucher_details(voucher_id)
+        self.assertEqual(len(details), 2)
+        debit_detail = next(d for d in details if float(d["debit_amount"] or 0) > 0)
+        credit_detail = next(d for d in details if float(d["credit_amount"] or 0) > 0)
+        self.assertEqual(float(debit_detail["debit_amount"]), 7777.0)
+        self.assertEqual(float(credit_detail["credit_amount"]), 7777.0)
+        # And the single Amount cell shows that exact amount.
+        self.assertEqual(self.ui.register_tree.item(children[0], "values")[4],
+                         "7,777.00")
+
+    def test_register_particulars_show_party(self):
+        children = self._save_payment_and_open_register()
+        values = self.ui.register_tree.item(children[0], "values")
+        # The payment party (ABC Traders) is the particulars, not the bank.
+        self.assertEqual(values[3], "ABC Traders")
+
+    def test_register_enter_opens_selected(self):
+        self._save_payment_and_open_register()
+        children = self.ui.register_tree.get_children()
+        self.ui.register_tree.selection_set(children[0])
+        # Enter on the register tree loads the selected voucher for edit.
+        self.ui._register_load_selected()
+        self._sync()
+        self.assertIsNotNone(self.ui.current_voucher_id)
+        self.assertIn("Editing", self.ui.mode_label.cget("text"))
+
+    def test_register_double_click_opens_selected(self):
+        self._save_payment_and_open_register()
+        children = self.ui.register_tree.get_children()
+        self.ui.register_tree.selection_set(children[0])
+        # Simulate the double-click binding (Double-Button-1 -> load selected).
+        self.ui._register_load_selected()
+        self._sync()
+        self.assertIsNotNone(self.ui.current_voucher_id)
+        self.assertIn("Editing", self.ui.mode_label.cget("text"))
+
+    def test_register_view_read_only(self):
+        self._save_payment_and_open_register()
+        children = self.ui.register_tree.get_children()
+        self.ui.register_tree.selection_set(children[0])
+        self.ui._register_load_selected(read_only=True)
+        self._sync()
+        self.assertIn("Viewing", self.ui.mode_label.cget("text"))
+        self.assertEqual(str(self.ui.date_entry.cget("state")), "disabled")
+
+    def test_register_esc_closes(self):
+        self._save_payment_and_open_register()
+        self.assertTrue(self.ui._register_open)
+        self.ui.on_keyboard_back()
+        self._sync()
+        self.assertFalse(self.ui._register_open)
+
+    def test_register_single_click_selects_row(self):
+        self._save_payment_and_open_register()
+        children = self.ui.register_tree.get_children()
+        # browse selection is the default Treeview behavior on click; simulate
+        # a click by selecting the row directly.
+        self.ui.register_tree.selection_set(children[0])
+        self.assertEqual(len(self.ui.register_tree.selection()), 1)
+
+    def test_register_search_filters(self):
+        self._fill_payment()
+        self.ui._save_voucher()
+        self._sync()
+        # A second voucher with a distinct narration.
+        self.ui.on_keyboard_new()
+        self.ui.type_var.set(VOUCHER_PAYMENT)
+        self.ui._on_type_changed()
+        self._fill_payment(amount=500.0)
+        self.ui.narration_var.set("Second payment")
+        self.ui._save_voucher()
+        self._sync()
+        self.ui._open_register()
+        self._sync()
+        # Two vouchers -> two rows.
+        self.assertEqual(len(self.ui.register_tree.get_children()), 2)
+        self.ui.register_search_var.set("Second")
+        self._sync()
+        self.assertEqual(len(self.ui.register_tree.get_children()), 1)
 
     # ------------------------------------------------------------------ #
     # company isolation

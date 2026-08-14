@@ -13,12 +13,14 @@ import customtkinter as ctk
 import config
 from services.trial_balance_service import trial_balance_service
 from ui.report_base import (
-    ReportHeader,
+    ReportBackHeader,
     FilterBar,
     ReportTable,
     ReportStatusBar,
-    make_date_entry,
+    ReportActionBar,
+    make_date_picker,
     make_button,
+    wire_report_keyboard,
 )
 from utils import dialogs
 
@@ -34,23 +36,22 @@ class TrialBalanceReportUI:
         self.main_frame = ctk.CTkFrame(parent, corner_radius=0, fg_color="transparent")
         self.main_frame.pack(fill="both", expand=True, padx=config.SPACING_XL, pady=config.SPACING_XL)
 
-        ReportHeader(self.main_frame, "Trial Balance", "Debit and credit balances as of a date")
+        ReportBackHeader(self.main_frame, "Trial Balance", "Debit and credit balances as of a date",
+                         on_back=self._back)
 
         filters = FilterBar(self.main_frame)
         self.as_on_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
         self.search_var = tk.StringVar()
 
-        filters.add("As On Date", make_date_entry(filters.body, self.as_on_date_var))
-        self.search_entry = ctk.CTkEntry(filters.body, textvariable=self.search_var, width=180,
-                                         corner_radius=config.INPUT_CORNER_RADIUS)
+        filters.add("As On Date", make_date_picker(filters.body, self.as_on_date_var))
+        self.search_entry = ctk.CTkEntry(filters.body, textvariable=self.search_var, width=200,
+                                         corner_radius=config.INPUT_CORNER_RADIUS, height=30)
         filters.add("Search", self.search_entry)
-        make_button(filters.body, "Generate", self._generate_report, accent=True).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export CSV", self._export_to_csv).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export JSON", self._export_to_json).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export PNG", self._export_to_png, width=100).pack(side="left")
+        filters.add_actions(
+            make_button(filters.body, "Generate", self._generate_report, accent=True),
+            make_button(filters.body, "Clear", self._clear_filters),
+        )
+        filters.add_modify_filters()
 
         self.table = ReportTable(self.main_frame, [
             {"id": "code", "heading": "Code", "width": 110},
@@ -61,8 +62,30 @@ class TrialBalanceReportUI:
         ])
         self.table.show_empty("Select a date and generate the Trial Balance to begin.")
 
+        ReportActionBar(
+            self.main_frame,
+            refresh=self._generate_report,
+            exports=[("Export CSV", self._export_to_csv),
+                     ("Export JSON", self._export_to_json),
+                     ("Export PNG", self._export_to_png)],
+            clear=self._clear_filters,
+            back=self._back,
+        )
+
         self.status = ReportStatusBar(self.main_frame)
         self.search_entry.bind("<KeyRelease>", lambda _e: self._on_search_changed())
+        wire_report_keyboard(self)
+
+    def _back(self) -> None:
+        back = getattr(self, "on_keyboard_back", None)
+        if callable(back):
+            back()
+
+    def _clear_filters(self) -> None:
+        self.as_on_date_var.set(date.today().strftime(config.DISPLAY_DATE_FORMAT))
+        self.search_var.set("")
+        self.table.show_empty("Select a date and generate the Trial Balance to begin.")
+        self.status.set("Filters cleared")
 
     def _parse_date(self, raw: str) -> Optional[date]:
         try:

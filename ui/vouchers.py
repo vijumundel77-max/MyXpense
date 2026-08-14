@@ -106,6 +106,9 @@ class VouchersFrame(ctk.CTkFrame):
             ("Ctrl+S", "Save"), ("Ctrl+N", "New"), ("Ctrl+F", "Search"),
             ("F5", "Refresh"), ("Del", "Cancel selected"), ("Esc", "Back"),
         ])
+        # Esc: close the Voucher Register first, then return to the previous
+        # screen (wire_entry_screen's default only navigates back).
+        self.on_keyboard_back = self._on_keyboard_back_register_aware  # type: ignore[attr-defined]
 
         self.refresh_vouchers()
         self._new_voucher()
@@ -922,27 +925,39 @@ class VouchersFrame(ctk.CTkFrame):
         tree_frame.grid_rowconfigure(0, weight=1)
         tree_frame.grid_columnconfigure(0, weight=1)
 
-        columns = ("number", "type", "date", "narration", "debit", "credit")
+        columns = ("number", "type", "date", "particulars", "amount")
         self.register_tree = ttk.Treeview(
             tree_frame, columns=columns, show="headings", selectmode="browse")
         for col, heading, width in [
-            ("number", "Voucher No.", 110),
-            ("type", "Type", 90),
-            ("date", "Date", 100),
-            ("narration", "Narration", 260),
-            ("debit", "Debit", 110),
-            ("credit", "Credit", 110),
+            ("number", "Voucher No.", 100),
+            ("type", "Type", 80),
+            ("date", "Date", 90),
+            ("particulars", "Particulars", 240),
+            ("amount", "Amount", 130),
         ]:
             self.register_tree.heading(col, text=heading)
             self.register_tree.column(col, width=width,
-                                      anchor="w" if col not in {"debit", "credit"} else "e")
+                                      anchor="w" if col != "amount" else "e")
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.register_tree.yview)
         self.register_tree.configure(yscrollcommand=vsb.set)
         self.register_tree.grid(row=0, column=0, sticky="nsew", padx=(config.SPACING_SM, 0),
                                 pady=config.SPACING_SM)
         vsb.grid(row=0, column=1, sticky="ns", pady=config.SPACING_SM)
+
+        # One row per VOUCHER.  The voucher's accounting lines are grouped
+        # into a single display row: the amount is the money moved, shown once
+        # (money IN / Receipt is green, money OUT / Payment is red).  The
+        # full Dr/Cr lines stay in the database and are shown in the voucher
+        # editor.  Selection-driven actions (single click, Enter, double-click,
+        # the Open/Edit and View buttons) all load the selected voucher.
+        self.register_tree.tag_configure("out", foreground=config.COLOR_EXPENSE)
+        self.register_tree.tag_configure("in", foreground=config.COLOR_INCOME)
+        self.register_tree.tag_configure("odd", background=config.COLOR_BG_MUTED)
+        self.register_tree.bind("<Button-1>", self._register_select_row, add="+")
         self.register_tree.bind("<Double-Button-1>", lambda _e: self._register_load_selected())
         self.register_tree.bind("<Return>", lambda _e: self._register_load_selected())
+        self.register_tree.bind("<KP_Enter>", lambda _e: self._register_load_selected())
+        self.register_tree.bind("<Escape>", lambda _e: self._close_register())
 
         actions = ctk.CTkFrame(container, fg_color="transparent")
         actions.grid(row=2, column=0, sticky="ew", pady=(config.SPACING_SM, 0))
@@ -965,7 +980,21 @@ class VouchersFrame(ctk.CTkFrame):
         )
         self.btn_register_close.pack(side="right")
 
+        # Register totals bar: sums of the ledger-side amounts shown above.
+        self.register_totals_label = ctk.CTkLabel(
+            container, text="", font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLOR_TEXT_PRIMARY, anchor="e",
+        )
+        self.register_totals_label.grid(row=3, column=0, sticky="ew",
+                                        pady=(config.SPACING_SM, 0))
+
         self._render_register()
+
+    def _register_select_row(self, _event=None) -> None:
+        """Single click: select the row (default Treeview browse behavior).
+        This hook exists so single-click selection is explicit and the row's
+        voucher is ready for Enter / Open / View."""
+        return None
 
     def _render_register(self) -> None:
         if self.register_tree is None:
@@ -974,7 +1003,16 @@ class VouchersFrame(ctk.CTkFrame):
             self.register_tree.delete(item)
         term = getattr(self, "register_search_var", None)
         search = term.get().strip().lower() if term is not None else ""
-        for index, voucher in enumerate(self.vouchers):
+        # One row per VOUCHER: the voucher's accounting lines are grouped into
+        # a single display row.  The amount is the money moved, shown once —
+        # money OUT (Payment) is red, money IN (Receipt) is green.  The
+        # Particulars show the actual main party/account (not the balancing
+        # ledger).  The backend Dr/Cr lines are untouched and remain visible
+        # in the voucher editor.
+        total_out = 0.0
+        total_in = 0.0
+        row_index = 0
+        for voucher in self.vouchers:
             if search:
                 haystack = " ".join([
                     str(voucher.get('voucher_number', '')),
@@ -983,21 +1021,93 @@ class VouchersFrame(ctk.CTkFrame):
                 ]).lower()
                 if search not in haystack:
                     continue
+            details = voucher_service.get_voucher_details(voucher['id'])
+            debit_total = sum(float(d.get('debit_amount', 0) or 0) for d in details)
+            credit_total = sum(float(d.get('credit_amount', 0) or 0) for d in details)
+            amount = round(max(debit_total, credit_total), 2)
+            vtype = voucher.get('voucher_type', '')
+            # Money OUT (Payment) -> red; money IN (Receipt) -> green.
+            if vtype == VOUCHER_PAYMENT:
+                total_out += amount
+                tags = ("out",)
+            elif vtype == VOUCHER_RECEIPT:
+                total_in += amount
+                tags = ("in",)
+            else:
+                # Contra / Journal move money within the books — neutral.
+                tags = ()
+            if row_index % 2:
+                tags = tags + ("odd",)
             self.register_tree.insert("", tk.END, iid=str(voucher['id']), values=(
                 voucher.get('voucher_number', ''),
-                voucher.get('voucher_type', ''),
+                vtype,
                 voucher.get('voucher_date', ''),
-                voucher.get('narration', ''),
-                f"{voucher.get('total_debit', 0):,.2f}",
-                f"{voucher.get('total_credit', 0):,.2f}",
-            ), tags=('even' if index % 2 == 0 else 'odd',))
+                self._register_particulars(details, voucher),
+                f"{amount:,.2f}",
+            ), tags=tags)
+            row_index += 1
+        self._update_register_totals(total_out, total_in)
+
+    def _register_particulars(self, details: List[Dict[str, Any]],
+                              voucher: Dict[str, Any]) -> str:
+        """The actual main party/account for a voucher's display row.
+
+        Prefers a party ledger (Sundry Debtors / Sundry Creditors); otherwise
+        falls back to the first non-cash/bank ledger so the balancing ledger
+        (e.g. "Unknown income") never appears as the particulars.
+        """
+        party = None
+        fallback = ""
+        for detail in details:
+            name, group = self._detail_account(detail)
+            if not name:
+                continue
+            if group in PARTY_GROUPS:
+                party = name
+                break
+            if not fallback and group not in CASH_GROUPS + BANK_GROUPS:
+                fallback = name
+            if not fallback:
+                fallback = name
+        return party or fallback or str(voucher.get('narration', '') or '')
+
+    def _detail_account(self, detail: Dict[str, Any]) -> tuple:
+        """(name, group) for a voucher detail's account."""
+        try:
+            row = db.fetch_one(
+                "SELECT name, account_group FROM accounts WHERE id = ?",
+                (detail.get('account_id'),))
+            if row:
+                return str(row["name"] or ""), str(row["account_group"] or "")
+        except Exception:
+            pass
+        return "", ""
+
+    def _detail_account_name(self, detail: Dict[str, Any]) -> str:
+        try:
+            row = db.fetch_one(
+                "SELECT name FROM accounts WHERE id = ?", (detail.get('account_id'),))
+            return row["name"] if row else ""
+        except Exception:
+            return ""
+
+    def _update_register_totals(self, total_out: float, total_in: float) -> None:
+        label = getattr(self, "register_totals_label", None)
+        if label is None:
+            return
+        label.configure(
+            text=f"Total Out: {total_out:,.2f}    "
+                 f"Total In: {total_in:,.2f}    "
+                 f"({len(self.register_tree.get_children())} vouchers)")
 
     def _register_load_selected(self, read_only: bool = False) -> None:
         selection = self.register_tree.selection()
         if not selection:
             dialogs.warn("Voucher Register", "Select a voucher to open.", parent=self.parent)
             return
-        voucher = voucher_service.get_voucher_with_details(int(selection[0]))
+        # Rows are keyed by the voucher id (one row per voucher).
+        voucher_id = int(selection[0])
+        voucher = voucher_service.get_voucher_with_details(voucher_id)
         if not voucher:
             return
         self._close_register()
@@ -1060,6 +1170,19 @@ class VouchersFrame(ctk.CTkFrame):
     def on_keyboard_delete(self) -> None:
         if self.current_voucher_id is not None:
             self._cancel_selected_voucher()
+
+    def _on_keyboard_back_register_aware(self) -> None:
+        """Esc: close the Voucher Register if it is open, otherwise return to
+        the previous screen (never quits the application)."""
+        if getattr(self, "_register_open", False):
+            self._close_register()
+            return
+        try:
+            app = self.winfo_toplevel()
+            if hasattr(app, "on_keyboard_back"):
+                app.on_keyboard_back()
+        except Exception:
+            pass
 
     def _set_status(self, text: str) -> None:
         self.status_var.set(text)

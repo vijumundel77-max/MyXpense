@@ -1,0 +1,8 @@
+Ageing Report
+Type:,Receivable
+As On Date:,2026-08-14
+
+Code,Party Name,0-30 days,31-60 days,61-90 days,91-180 days,Above 180 days,Total
+CUST001,Customer A,"4,000.00",0.00,0.00,0.00,0.00,"4,000.00"
+
+,TOTAL,"4,000.00",0.00,0.00,0.00,0.00,"4,000.00"

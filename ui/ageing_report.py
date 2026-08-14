@@ -14,12 +14,14 @@ import customtkinter as ctk
 import config
 from services.ageing_report_service import ageing_report_service
 from ui.report_base import (
-    ReportHeader,
+    ReportBackHeader,
     FilterBar,
     ReportStatusBar,
-    make_date_entry,
+    ReportActionBar,
+    make_date_picker,
     make_readonly_combo,
     make_button,
+    wire_report_keyboard,
 )
 from utils import dialogs
 
@@ -38,7 +40,8 @@ class AgeingReportUI:
         self.main_frame = ctk.CTkFrame(parent, corner_radius=0, fg_color="transparent")
         self.main_frame.pack(fill="both", expand=True, padx=config.SPACING_XL, pady=config.SPACING_XL)
 
-        ReportHeader(self.main_frame, "Ageing Report", "Ageing buckets with FIFO allocation")
+        ReportBackHeader(self.main_frame, "Ageing Report", "Ageing buckets with FIFO allocation",
+                         on_back=self._back)
 
         filters = FilterBar(self.main_frame)
         self.ageing_type_var = tk.StringVar(value="Receivable")
@@ -49,28 +52,29 @@ class AgeingReportUI:
 
         self.ageing_type_combo = make_readonly_combo(filters.body, list(AGEING_TYPES), self.ageing_type_var, 130)
         filters.add("Ageing Type", self.ageing_type_combo)
-        filters.add("As On Date", make_date_entry(filters.body, self.as_on_date_var))
+        filters.add("As On Date", make_date_picker(filters.body, self.as_on_date_var))
         ctk.CTkCheckBox(
             filters.body, text="Custom buckets", variable=self.use_custom_buckets_var,
             command=self._toggle_custom_buckets, font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, config.SPACING_LG))
+        ).grid(row=0, column=6, columnspan=3, sticky="w", padx=(0, config.SPACING_LG),
+               pady=(config.SPACING_XS, config.SPACING_XS))
 
         self.custom_buckets_entry = ctk.CTkEntry(
             filters.body, textvariable=self.custom_buckets_var, width=240,
-            corner_radius=config.INPUT_CORNER_RADIUS)
-        self.custom_buckets_entry.pack(side="left", padx=(0, config.SPACING_LG))
-        self.custom_buckets_entry.pack_forget()
+            corner_radius=config.INPUT_CORNER_RADIUS, height=30)
+        self.custom_buckets_entry.grid(row=2, column=0, columnspan=5, sticky="w",
+                                       padx=(0, config.SPACING_LG),
+                                       pady=(config.SPACING_XS, config.SPACING_XS))
+        self.custom_buckets_entry.grid_remove()
 
-        self.search_entry = ctk.CTkEntry(filters.body, textvariable=self.search_var, width=150,
-                                         corner_radius=config.INPUT_CORNER_RADIUS)
+        self.search_entry = ctk.CTkEntry(filters.body, textvariable=self.search_var, width=180,
+                                         corner_radius=config.INPUT_CORNER_RADIUS, height=30)
         filters.add("Search", self.search_entry)
-        make_button(filters.body, "Generate", self._generate_report, accent=True).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export CSV", self._export_to_csv).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export JSON", self._export_to_json).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export PNG", self._export_to_png, width=100).pack(side="left")
+        filters.add_actions(
+            make_button(filters.body, "Generate", self._generate_report, accent=True),
+            make_button(filters.body, "Clear", self._clear_filters),
+        )
+        filters.add_modify_filters()
 
         # Dynamic-column table (buckets change per report).
         self.table = ctk.CTkFrame(
@@ -99,17 +103,44 @@ class AgeingReportUI:
         self.ageing_tree.bind("<Double-1>", self._on_party_double_click)
 
         self.status = ReportStatusBar(self.main_frame)
+
+        ReportActionBar(
+            self.main_frame,
+            refresh=self._generate_report,
+            exports=[("Export CSV", self._export_to_csv),
+                     ("Export JSON", self._export_to_json),
+                     ("Export PNG", self._export_to_png)],
+            clear=self._clear_filters,
+            back=self._back,
+        )
+
         self.search_entry.bind("<KeyRelease>", lambda _e: self._on_search_changed())
+        wire_report_keyboard(self)
+
+    def _back(self) -> None:
+        back = getattr(self, "on_keyboard_back", None)
+        if callable(back):
+            back()
+
+    def _clear_filters(self) -> None:
+        self.ageing_type_var.set("Receivable")
+        self.as_on_date_var.set(date.today().strftime(config.DISPLAY_DATE_FORMAT))
+        self.use_custom_buckets_var.set(False)
+        self.custom_buckets_var.set(DEFAULT_BUCKETS_STRING)
+        self.search_var.set("")
+        self._toggle_custom_buckets()
+        self.totals_label.configure(text="")
+        self.ageing_tree.delete(*self.ageing_tree.get_children())
+        self.status.set("Filters cleared")
 
     # ------------------------------------------------------------------ #
     # helpers
     # ------------------------------------------------------------------ #
     def _toggle_custom_buckets(self) -> None:
         if self.use_custom_buckets_var.get():
-            self.custom_buckets_entry.pack(
-                side="left", padx=(0, config.SPACING_LG))
+            self.custom_buckets_entry.grid()
         else:
-            self.custom_buckets_entry.pack_forget()
+            self.custom_buckets_entry.grid_remove()
 
     @staticmethod
     def _bucket_upper_bound(bucket_name: str) -> Optional[int]:

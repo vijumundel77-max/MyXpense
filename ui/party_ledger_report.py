@@ -13,13 +13,15 @@ import customtkinter as ctk
 import config
 from services.party_ledger_service import party_ledger_service
 from ui.report_base import (
-    ReportHeader,
+    ReportBackHeader,
     FilterBar,
     ReportTable,
     ReportStatusBar,
-    make_date_entry,
+    ReportActionBar,
+    make_date_picker,
     make_readonly_combo,
     make_button,
+    wire_report_keyboard,
 )
 from utils import dialogs
 
@@ -40,7 +42,8 @@ class PartyLedgerReportUI:
         self.main_frame = ctk.CTkFrame(parent, corner_radius=0, fg_color="transparent")
         self.main_frame.pack(fill="both", expand=True, padx=config.SPACING_XL, pady=config.SPACING_XL)
 
-        ReportHeader(self.main_frame, "Party Ledger", "Party-wise ledger and summary")
+        ReportBackHeader(self.main_frame, "Party Ledger", "Party-wise ledger and summary",
+                         on_back=self._back)
 
         filters = FilterBar(self.main_frame)
         self.report_type_var = tk.StringVar(value="Ledger")
@@ -54,20 +57,18 @@ class PartyLedgerReportUI:
         filters.add("Report", self.report_type_combo)
         self.party_type_combo = make_readonly_combo(filters.body, list(PARTY_TYPES), self.party_type_var, 110)
         filters.add("Party Type", self.party_type_combo)
-        self.party_combo = make_readonly_combo(filters.body, [], self.party_var, 240)
+        self.party_combo = make_readonly_combo(filters.body, [], self.party_var, 220)
         filters.add("Party", self.party_combo)
-        filters.add("From Date", make_date_entry(filters.body, self.from_date_var))
-        filters.add("To Date", make_date_entry(filters.body, self.to_date_var))
-        self.search_entry = ctk.CTkEntry(filters.body, textvariable=self.search_var, width=140,
-                                         corner_radius=config.INPUT_CORNER_RADIUS)
+        filters.add("From Date", make_date_picker(filters.body, self.from_date_var))
+        filters.add("To Date", make_date_picker(filters.body, self.to_date_var))
+        self.search_entry = ctk.CTkEntry(filters.body, textvariable=self.search_var, width=180,
+                                         corner_radius=config.INPUT_CORNER_RADIUS, height=30)
         filters.add("Search", self.search_entry)
-        make_button(filters.body, "Generate", self._generate_report, accent=True).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export CSV", self._export_to_csv).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export JSON", self._export_to_json).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export PNG", self._export_to_png, width=100).pack(side="left")
+        filters.add_actions(
+            make_button(filters.body, "Generate", self._generate_report, accent=True),
+            make_button(filters.body, "Clear", self._clear_filters),
+        )
+        filters.add_modify_filters()
 
         # Party selector refresh on party-type / search changes.
         self.party_type_combo.configure(command=lambda _: self._load_parties())
@@ -101,8 +102,36 @@ class PartyLedgerReportUI:
         self.summary_table.show_empty("Generate a party summary to begin.")
         self.summary_table.pack_forget()
 
+        ReportActionBar(
+            self.main_frame,
+            refresh=self._generate_report,
+            exports=[("Export CSV", self._export_to_csv),
+                     ("Export JSON", self._export_to_json),
+                     ("Export PNG", self._export_to_png)],
+            clear=self._clear_filters,
+            back=self._back,
+        )
+
         self.status = ReportStatusBar(self.main_frame)
         self._load_parties()
+        wire_report_keyboard(self)
+
+    def _back(self) -> None:
+        back = getattr(self, "on_keyboard_back", None)
+        if callable(back):
+            back()
+
+    def _clear_filters(self) -> None:
+        self.report_type_var.set("Ledger")
+        self.party_type_var.set("Debtor")
+        self.party_var.set("")
+        self.from_date_var.set(date.today().strftime(config.DISPLAY_DATE_FORMAT))
+        self.to_date_var.set(date.today().strftime(config.DISPLAY_DATE_FORMAT))
+        self.search_var.set("")
+        self._load_parties()
+        self.ledger_table.show_empty("Select a party and generate the ledger to begin.")
+        self.summary_table.show_empty("Generate a party summary to begin.")
+        self.status.set("Filters cleared")
 
     # ------------------------------------------------------------------ #
     # data

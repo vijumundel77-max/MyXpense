@@ -13,13 +13,15 @@ import customtkinter as ctk
 import config
 from services.cash_book_service import cash_book_service
 from ui.report_base import (
-    ReportHeader,
+    ReportBackHeader,
     FilterBar,
     ReportTable,
     ReportStatusBar,
-    make_date_entry,
+    ReportActionBar,
+    make_date_picker,
     make_readonly_combo,
     make_button,
+    wire_report_keyboard,
 )
 from utils import dialogs
 
@@ -35,7 +37,8 @@ class CashBookReportUI:
         self.main_frame = ctk.CTkFrame(parent, corner_radius=0, fg_color="transparent")
         self.main_frame.pack(fill="both", expand=True, padx=config.SPACING_XL, pady=config.SPACING_XL)
 
-        ReportHeader(self.main_frame, "Cash Book", "Cash movement from vouchers")
+        ReportBackHeader(self.main_frame, "Cash Book", "Cash movement from vouchers",
+                         on_back=self._back)
 
         filters = FilterBar(self.main_frame)
         self.from_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
@@ -43,20 +46,19 @@ class CashBookReportUI:
         self.account_var = tk.StringVar(value="All Accounts")
         self.search_var = tk.StringVar()
 
-        filters.add("From Date", make_date_entry(filters.body, self.from_date_var))
-        filters.add("To Date", make_date_entry(filters.body, self.to_date_var))
+        filters.add("From Date", make_date_picker(filters.body, self.from_date_var))
+        filters.add("To Date", make_date_picker(filters.body, self.to_date_var))
         self.account_combo = make_readonly_combo(filters.body, ["All Accounts"], self.account_var, 200)
         filters.add("Account", self.account_combo)
-        filters.add("Search", ctk.CTkEntry(
-            filters.body, textvariable=self.search_var, width=170,
-            corner_radius=config.INPUT_CORNER_RADIUS))
-        make_button(filters.body, "Generate", self._generate_report, accent=True).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export CSV", self._export_to_csv).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export JSON", self._export_to_json).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export PNG", self._export_to_png, width=100).pack(side="left")
+        self.search_entry = ctk.CTkEntry(
+            filters.body, textvariable=self.search_var, width=200,
+            corner_radius=config.INPUT_CORNER_RADIUS, height=30)
+        filters.add("Search", self.search_entry)
+        filters.add_actions(
+            make_button(filters.body, "Generate", self._generate_report, accent=True),
+            make_button(filters.body, "Clear", self._clear_filters),
+        )
+        filters.add_modify_filters()
 
         columns = [
             {"id": "date", "heading": "Date", "width": 100},
@@ -72,8 +74,32 @@ class CashBookReportUI:
         self.table = ReportTable(self.main_frame, columns)
         self.table.show_empty("Select dates and generate the Cash Book to begin.")
 
+        ReportActionBar(
+            self.main_frame,
+            refresh=self._generate_report,
+            exports=[("Export CSV", self._export_to_csv),
+                     ("Export JSON", self._export_to_json),
+                     ("Export PNG", self._export_to_png)],
+            clear=self._clear_filters,
+            back=self._back,
+        )
+
         self.status = ReportStatusBar(self.main_frame)
         self._load_accounts()
+        wire_report_keyboard(self)
+
+    def _back(self) -> None:
+        back = getattr(self, "on_keyboard_back", None)
+        if callable(back):
+            back()
+
+    def _clear_filters(self) -> None:
+        self.from_date_var.set(date.today().strftime(config.DISPLAY_DATE_FORMAT))
+        self.to_date_var.set(date.today().strftime(config.DISPLAY_DATE_FORMAT))
+        self.account_var.set("All Accounts")
+        self.search_var.set("")
+        self.table.show_empty("Select dates and generate the Cash Book to begin.")
+        self.status.set("Filters cleared")
 
     def _load_accounts(self) -> None:
         sources = cash_book_service._get_cash_sources(self.company_id)

@@ -335,7 +335,16 @@
       "Shell(pip3:*)",
       "Shell(python3 -m pip list 2 >& 1)",
       "Shell(cat \"/mnt/d/wind app/MyXpense/.venv/pyvenv.cfg\" 2>/dev/null; echo \"---\"; ls \"/mnt/d/wind app/MyXpense/.venv/Scripts\" 2>/dev/null | head -20)",
-      "Shell(/mnt/d/wind app/MyXpense/.venv/Scripts/python.exe:*)"
+      "Shell(/mnt/d/wind app/MyXpense/.venv/Scripts/python.exe:*)",
+      "Shell(python -c import ast; ast.parse(open('ui/reports.py').read()); print('reports.py OK'))",
+      "Shell(python3 -c import ast; ast.parse(open('ui/reports.py').read()); print('reports.py OK') 2 >& 1)",
+      "Shell(python3 -c import customtkinter as ctk, inspect; print(inspect.signature(ctk.CTkFrame.__init__)); print(inspect.signature(ctk.CTkFrame.configure)))",
+      "Shell(cd \"/mnt/d/wind app/MyXpense\" && ls -la .venv venv 2>/dev/null; cat requirements.txt 2>/dev/null; which python3; python3 --version)",
+      "Shell(./.venv/Scripts/python:*)",
+      "Shell(./.venv/bin/python:*)",
+      "Shell(/mnt/d/wind app/Python313/python.exe:*)",
+      "Shell(cd \"/mnt/d/wind app/MyXpense\" && cat > /tmp/probe_rows.py << 'EOF' import config config.DATABASE_PATH = ':memory:' import customtkinter as ctk, tkinter as tk from database.database import db from services.group_service import group_service from ui.reports import ReportsHubUI root = ctk.CTk(); root.withdraw() db.initialize_database() db.execute(\"INSERT INTO companies (id, name) VALUES (1, 'C')\") group_service.seed_default_groups(1) hub = ReportsHubUI(root, 1) root.update_idletasks(); root.update() hub._on_card_click(\"Day Book\"); hub._on_global_enter() root.update_idletasks(); root.update() ui = hub.current_report_ui for c in ui.main_frame.winfo_children(): if c.__class__.__name__ == \"FilterBar\": fb = c rows = {} for w in fb.body.winfo_children(): info = w.grid_info() r = info.get(\"row\") if info else None col = info.get(\"column\") if info else None txt = \"\" try: txt = str(w.cget(\"text\")) except Exception: pass rows.setdefault((r,col), []).append(txt or w.__class__.__name__) for k in sorted(rows): print(k, rows[k]) root.destroy() EOF \"/mnt/d/wind app/Python313/python.exe\" /tmp/probe_rows.py 2>&1 | tail -25)",
+      "Shell(tail -5 \"/tmp/commandcode/shellout/2026-08-14T11-14-25-309Z-s0semx1s.log\" 2>/dev/null; echo \"---\"; wc -l \"/tmp/commandcode/shellout/2026-08-14T11-14-25-309Z-s0semx1s.log\" 2>/dev/null)"
     ],
     "deny": [],
     "defaultMode": "default"

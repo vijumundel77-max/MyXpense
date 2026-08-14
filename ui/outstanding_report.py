@@ -13,13 +13,15 @@ import customtkinter as ctk
 import config
 from services.outstanding_report_service import outstanding_report_service
 from ui.report_base import (
-    ReportHeader,
+    ReportBackHeader,
     FilterBar,
     ReportTable,
     ReportStatusBar,
-    make_date_entry,
+    ReportActionBar,
+    make_date_picker,
     make_readonly_combo,
     make_button,
+    wire_report_keyboard,
 )
 from utils import dialogs
 
@@ -38,7 +40,8 @@ class OutstandingReportUI:
         self.main_frame = ctk.CTkFrame(parent, corner_radius=0, fg_color="transparent")
         self.main_frame.pack(fill="both", expand=True, padx=config.SPACING_XL, pady=config.SPACING_XL)
 
-        ReportHeader(self.main_frame, "Outstanding Report", "Receivables, payables and ageing")
+        ReportBackHeader(self.main_frame, "Outstanding Report", "Receivables, payables and ageing",
+                         on_back=self._back)
 
         filters = FilterBar(self.main_frame)
         self.report_type_var = tk.StringVar(value="Outstanding")
@@ -51,21 +54,20 @@ class OutstandingReportUI:
         filters.add("Report", self.report_type_combo)
         self.outstanding_type_combo = make_readonly_combo(filters.body, list(OUTSTANDING_TYPES), self.outstanding_type_var, 130)
         filters.add("Type", self.outstanding_type_combo)
-        filters.add("As On Date", make_date_entry(filters.body, self.as_on_date_var))
+        filters.add("As On Date", make_date_picker(filters.body, self.as_on_date_var))
         ctk.CTkCheckBox(
             filters.body, text="Include zero balance", variable=self.include_zero_var,
             font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, config.SPACING_LG))
-        self.search_entry = ctk.CTkEntry(filters.body, textvariable=self.search_var, width=150,
-                                         corner_radius=config.INPUT_CORNER_RADIUS)
+        ).grid(row=0, column=6, columnspan=3, sticky="w", padx=(0, config.SPACING_LG),
+               pady=(config.SPACING_XS, config.SPACING_XS))
+        self.search_entry = ctk.CTkEntry(filters.body, textvariable=self.search_var, width=180,
+                                         corner_radius=config.INPUT_CORNER_RADIUS, height=30)
         filters.add("Search", self.search_entry)
-        make_button(filters.body, "Generate", self._generate_report, accent=True).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export CSV", self._export_to_csv).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export JSON", self._export_to_json).pack(
-            side="left", padx=(0, config.SPACING_SM))
-        make_button(filters.body, "Export PNG", self._export_to_png, width=100).pack(side="left")
+        filters.add_actions(
+            make_button(filters.body, "Generate", self._generate_report, accent=True),
+            make_button(filters.body, "Clear", self._clear_filters),
+        )
+        filters.add_modify_filters()
 
         self.outstanding_table = ReportTable(self.main_frame, [
             {"id": "code", "heading": "Code", "width": 100},
@@ -99,8 +101,36 @@ class OutstandingReportUI:
 
         self.status = ReportStatusBar(self.main_frame)
 
+        ReportActionBar(
+            self.main_frame,
+            refresh=self._generate_report,
+            exports=[("Export CSV", self._export_to_csv),
+                     ("Export JSON", self._export_to_json),
+                     ("Export PNG", self._export_to_png)],
+            clear=self._clear_filters,
+            back=self._back,
+        )
+
         self.report_type_combo.configure(command=lambda _: self._on_report_type_changed())
         self.search_entry.bind("<KeyRelease>", lambda _e: self._on_search_changed())
+        wire_report_keyboard(self)
+
+    def _back(self) -> None:
+        back = getattr(self, "on_keyboard_back", None)
+        if callable(back):
+            back()
+
+    def _clear_filters(self) -> None:
+        self.report_type_var.set("Outstanding")
+        self.outstanding_type_var.set("Receivable")
+        self.as_on_date_var.set(date.today().strftime(config.DISPLAY_DATE_FORMAT))
+        self.include_zero_var.set(False)
+        self.search_var.set("")
+        self.outstanding_table.show_empty("Generate the outstanding report to begin.")
+        self.ageing_table.show_empty("Generate the ageing summary to begin.")
+        self.overdue_table.show_empty("Generate the overdue report to begin.")
+        self._on_report_type_changed()
+        self.status.set("Filters cleared")
 
     def _on_report_type_changed(self) -> None:
         report_type = self.report_type_var.get()
