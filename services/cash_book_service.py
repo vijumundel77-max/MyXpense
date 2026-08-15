@@ -103,6 +103,48 @@ class CashBookService:
         )
 
     @staticmethod
+    def _opening_balance_as_of(
+        accounts: List[Dict[str, Any]],
+        from_date: date,
+    ) -> float:
+        """Date-aware opening balance for the given accounts.
+
+        The raw opening balance from the account master is the balance at
+        books-begin. For a report that starts mid-period, every voucher
+        detail BEFORE ``from_date`` must also be applied so the opening
+        balance reflects the account's true position at the report start —
+        otherwise the opening balance (and every running balance after it)
+        is wrong whenever transactions exist before the from-date.
+        """
+        opening_balance = sum(a['signed_opening'] for a in accounts)
+        if not accounts:
+            return opening_balance
+
+        account_ids = [a['id'] for a in accounts]
+        placeholders = ','.join('?' * len(account_ids))
+        rows = db.fetch_all(
+            f"""
+            SELECT
+                vd.account_id,
+                COALESCE(SUM(vd.debit_amount), 0) AS total_debit,
+                COALESCE(SUM(vd.credit_amount), 0) AS total_credit
+            FROM voucher_details vd
+            JOIN vouchers v ON v.id = vd.voucher_id
+            WHERE vd.account_id IN ({placeholders})
+              AND v.company_id = ?
+              AND v.status != ?
+              AND v.voucher_date < ?
+            GROUP BY vd.account_id
+            """,
+            tuple(account_ids) + (accounts[0]['company_id'], STATUS_CANCELLED, from_date.isoformat()),
+        )
+        for row in rows:
+            debit = float(CashBookService._row_value(row, 'total_debit', 0.0) or 0.0)
+            credit = float(CashBookService._row_value(row, 'total_credit', 0.0) or 0.0)
+            opening_balance += debit - credit
+        return opening_balance
+
+    @staticmethod
     def _get_expenzo_book_transactions(
         company_id: int,
         book_group: str,
@@ -113,13 +155,14 @@ class CashBookService:
         """Voucher detail lines for the book's accounts.
 
         Returns (transactions, opening_balance) where opening_balance is the
-        sum of signed opening balances for the accounts in scope.
+        date-aware balance as of ``from_date``: the sum of signed opening
+        balances plus all voucher activity before ``from_date``.
         """
         accounts = CashBookService._book_accounts(company_id, book_group)
         if account_id is not None:
             accounts = [a for a in accounts if a['id'] == account_id]
 
-        opening_balance = sum(a['signed_opening'] for a in accounts)
+        opening_balance = CashBookService._opening_balance_as_of(accounts, from_date)
 
         if not accounts:
             return [], opening_balance
@@ -310,11 +353,14 @@ class CashBookService:
             txn_type = CashBookService._classify_transaction(transaction)
             debit = float(transaction.get('debit_amount', 0.0) or 0.0)
             credit = float(transaction.get('credit_amount', 0.0) or 0.0)
+            # Every detail line moves the running balance exactly once:
+            # debit adds, credit subtracts. Receipt/Payment lines are the
+            # common case; Transfer (a line with both debit and credit) also
+            # nets out so no voucher side is ever silently skipped.
+            running_balance += debit - credit
             if txn_type == 'Receipt':
-                running_balance += debit
                 total_receipts += debit
             elif txn_type == 'Payment':
-                running_balance -= credit
                 total_payments += credit
             transaction['transaction_type'] = txn_type
             transaction['running_balance'] = CashBookService._round_amount(abs(running_balance))

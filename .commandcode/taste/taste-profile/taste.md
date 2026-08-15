@@ -60,9 +60,7 @@
 - The parent/hub container owns back-navigation while a child screen is open: a child's Esc must be routed back to its hub's back handler, never bypassing the hub and jumping directly to the top-level app navigation history. Confidence: 0.8
 - Bug fixes should come with targeted regression tests that assert the fixed behavior (state transitions such as cards hidden/visible, no duplicate widgets after repeated open/close cycles, correct screen object opened per button, correct parameters passed) — and existing tests must never be weakened or removed. Confidence: 0.8
 - When fixing a navigation/wiring bug, repairs only the broken wiring: does not redesign or rebuild the existing screens/modules involved, does not change card/button appearance, theme, schema, or accounting logic, and preserves the existing CRUD functionality. Confidence: 0.85
-nted — and the active state must update immediately both on theme switch and on navigation. Confidence: 0.75
-
-- Prefers full autonomy on strict implementation tasks: proceed continuously through file inspection, edits, tests, shell commands, real-app launches, and regression fixes without pausing to ask permission/confirmation for safe operations — only stop for operations genuinely destructive/irreversible outside the task scope. Confidence: 0.9
+- Prefers full autonomy on strict implementation tasks: proceed continuously through file inspection, edits, tests, shell commands, real-app launches, and regression fixes without pausing to ask permission/confirmation for safe operations — only stop for operations genuinely destructive/irreversible outside the task scope. Explicitly grants blanket approval up front ("All permissions approved. Confirmation mat puchna. Directly inspect, implement, test and verify karo."). Confidence: 0.95
 - For master workflows, the management/list screen and the create/edit form must be separate states/screens within the same module — never cram both into one combined layout; Create and Edit must reuse the same form component, and navigation must not rebuild duplicate widgets/screens on each visit. Confidence: 0.95
 - Primary content (the data table/list) must get layout priority over auxiliary info panels and shortcut bars — such panels should be compact and never consume space needed for the actual data. Confidence: 0.7
 - Every important workflow shortcut must also have a visible button/action in the toolbar — never present a shortcut only as text (e.g., "Ctrl+N = New Company") while hiding the actual button. Confidence: 0.85
@@ -73,10 +71,6 @@ nted — and the active state must update immediately both on theme switch and o
 - Master-data delete protection also covers the last remaining record (never allow deleting the last company; at least one must always exist), and destructive deletes must always go through an explicit confirmation dialog. Confidence: 0.75
 - Data tables/lists must be professional desktop-quality: visible rows with proper height and readable typography, clearly highlighted selection plus hover highlight, alternating row treatment, vertical scrolling only when needed (horizontal only when genuinely required), and a "Showing X to Y of Z" summary footer; action buttons enable only when a row is selected. Confidence: 0.7
 
-ng CRUD functionality. Confidence: 0.85
-nted — and the active state must update immediately both on theme switch and on navigation. Confidence: 0.75
-
-, existing useful columns) unless they damage the layout — never silently drop working features during a rewrite. Confidence: 0.75
 - For relational form fields use proper controls populated from existing master data — e.g., a dropdown of Groups for "Under", a Debit/Credit selector for Dr/Cr, a numeric input for Opening Balance — never arbitrary free text when the existing system already has a selector. Confidence: 0.85
 - New master screens must follow the finalized reference master workflow (e.g., the Company Master) as the structural template: the same stateful List/Create/Edit/View architecture, header/toolbar/action-bar patterns, and visual language. Confidence: 0.85
 - For accounting entry screens, prefers the traditional Tally-style voucher workflow over generic ERP/database forms: Particulars / To / By / Dr / Cr layout, Party A/C selector, To/By credit lines, live Total Debit/Total Credit/Difference, narration, and a keyboard-driven multi-line grid; Tally is a workflow/UX reference only — never copy its branding or exact visual design. Confidence: 0.9
@@ -97,11 +91,8 @@ nted — and the active state must update immediately both on theme switch and o
 - Day Book (voucher register) is deliberately kept simple and readable: ONE row per voucher with columns Date | Particulars | Vch Type | Vch No. | Amount — the amount is the voucher's single money movement shown exactly once, color-coded by money direction (Payment/money OUT = red, Receipt/money IN = green, Contra/Journal = neutral); full Dr/Cr ledger lines are NOT shown in the register but open in the existing voucher editor on Enter/double-click; only Day Book presentation changes — backend accounting/posting must stay untouched. Confidence: 0.8
 - The latest user instruction overrides earlier design decisions: the user freely reverses previously implemented and verified UI designs (Day Book and then Voucher Register both switched from per-line debit/credit rows to simple one-row-per-voucher) and expects the newest spec implemented without resistance. Confidence: 0.75
 
-ng CRUD functionality. Confidence: 0.85
-nted — and the active state must update immediately both on theme switch and on navigation. Confidence: 0.75
-
- without resistance. Confidence: 0.7
-
-ng CRUD functionality. Confidence: 0.85
-nted — and the active state must update immediately both on theme switch and on navigation. Confidence: 0.75
-
+- Packaging/release work on a release candidate must be strictly additive: no feature or UI changes — only packaging, data-location, and metadata changes. Confidence: 0.9
+- Never ship development/working data (e.g., the dev database) inside a release installer: new installs get a clean database created by the app's own defaults; dev data stays in the repo and out of the installer. Confidence: 0.9
+- Desktop app user data (database, exports) must live outside the program files directory (e.g., %APPDATA%) and be preserved untouched across reinstall/update and uninstall — program files and user data are strictly separated. Confidence: 0.9
+- Prefers per-user, no-admin installs for desktop apps (e.g., Inno Setup with PrivilegesRequired=lowest installing to %LOCALAPPDATA%\Programs) with Start Menu + desktop shortcuts. Confidence: 0.7
+- Release packaging is only considered done when verified end-to-end on the target machine: silent install, launch, fresh-install clean-data creation, reinstall data preservation, and uninstall that retains user data. Confidence: 0.8

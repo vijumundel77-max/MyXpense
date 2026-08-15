@@ -4,6 +4,9 @@ Modern sidebar navigation, company-aware header, theme toggle, view routing.
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import customtkinter as ctk
 
 import config
@@ -37,6 +40,28 @@ from utils import keyboard, theme
 def _sidebar_accent(dark_value: str, light_value: str) -> str:
     """Resolve a sidebar accent token to the active theme's value."""
     return dark_value if ctk.get_appearance_mode() != "Light" else light_value
+
+
+def _application_icon() -> str | None:
+    """Resolve the bundled application icon (packaged build or dev tree).
+
+    Returns the path to the .ico when present, else None so a dev run without
+    the icon asset still launches normally.
+    """
+    candidates = []
+    if getattr(sys, "frozen", False):
+        # PyInstaller onedir: runtime data is next to the executable.
+        candidates.append(Path(sys.executable).resolve().parent / "assets" / "expenzo.ico")
+        # PyInstaller onefile: data is unpacked under sys._MEIPASS.
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "assets" / "expenzo.ico")
+    else:
+        candidates.append(config.BASE_DIR / "assets" / "expenzo.ico")
+    for path in candidates:
+        if path.is_file():
+            return str(path)
+    return None
 
 
 class SidebarButton(ctk.CTkButton):
@@ -76,6 +101,13 @@ class ExpenzoApp(ctk.CTk):
         ctk.set_default_color_theme(config.COLOR_THEME)
 
         self.title(f"{APP_NAME} — {APP_SUBTITLE}")
+        icon_path = _application_icon()
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                # Icon is cosmetic; never block startup if it cannot load.
+                pass
         self.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
         self.configure(fg_color=COLOR_BG_PRIMARY)
 

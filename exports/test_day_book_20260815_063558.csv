@@ -1,0 +1,8 @@
+Day Book
+Period:,2026-08-01 to 2026-08-31
+
+Date,Voucher No.,Type,Reference,Account,Narration,Debit,Credit
+2026-08-01,PV-0001,Payment,,Rent,,500.00,0.00
+2026-08-01,PV-0001,Payment,,Bank,,0.00,500.00
+
+Totals,,,,,,500.00,500.00

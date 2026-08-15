@@ -249,8 +249,100 @@ class TestCashBankIntegration(unittest.TestCase):
             self.company_id, date(2026, 8, 5), date(2026, 8, 31))
         self.assertEqual(partial['receipts'], 2000.0)
         self.assertEqual(partial['transaction_count'], 1)
-        # Opening balance for the filtered range starts at the baseline
-        self.assertEqual(partial['opening_balance'], 10000.0)
+        # Opening balance for the filtered range is date-aware: 10000 opening
+        # + 1000 receipt on 01-Aug (before the window) = 11000.
+        self.assertEqual(partial['opening_balance'], 11000.0)
+        # Closing still reconciles: 11000 + 2000 = 13000.
+        self.assertEqual(partial['closing_balance']['amount'], 13000.0)
+
+    # ------------------------------------------------------------------ #
+    # opening balance / running balance regression (generic)
+    # ------------------------------------------------------------------ #
+    def test_opening_balance_is_date_aware_mid_period(self):
+        """A bank account with an opening balance and activity before the
+        report from-date must have that pre-period activity folded into the
+        opening balance — the opening balance is never added again inside
+        the running-balance loop (each voucher applies exactly once)."""
+        # Bank opens at 50000; a receipt before the report window.
+        VoucherService.save_voucher(
+            self.company_id, 'Receipt', date(2026, 8, 3),
+            [
+                {'account_id': self.acct['bank'], 'debit_amount': 4000.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 4000.0},
+            ],
+        )
+        report = cash_book_service.generate_bank_book(
+            self.company_id, date(2026, 8, 5), date(2026, 8, 31))
+        # Opening = 50000 + 4000 (pre-period receipt) = 54000
+        self.assertEqual(report['opening_balance'], 54000.0)
+        self.assertEqual(report['transaction_count'], 0)
+        self.assertEqual(report['closing_balance']['amount'], 54000.0)
+
+    def test_opening_balance_not_double_counted(self):
+        """Pre-period activity must appear in the opening balance exactly
+        once — not once in opening and again in the running balance."""
+        VoucherService.save_voucher(
+            self.company_id, 'Receipt', date(2026, 8, 3),
+            [
+                {'account_id': self.acct['bank'], 'debit_amount': 4000.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 4000.0},
+            ],
+        )
+        report = cash_book_service.generate_bank_book(
+            self.company_id, date(2026, 8, 5), date(2026, 8, 31))
+        # opening + receipts - payments == closing; no double count.
+        self.assertEqual(
+            report['opening_balance'] + report['receipts'] - report['payments'],
+            report['closing_balance']['amount'])
+        self.assertEqual(report['closing_balance']['amount'], 54000.0)
+
+    def test_phonepe_opening_balance_contra_regression(self):
+        """Regression: PhonePe account with ₹5,700 opening balance and two
+        Contra vouchers (03-Aug money out, 05-Aug money back). The running
+        balance must be 5700 -> 700 -> 5700, and a mid-period report must
+        open at the true position (700 after the 03-Aug contra)."""
+        phonepe = AccountService.create_account(
+            self.company_id, 'PhonePe', 'PP', 'Bank Accounts', 5700.0, 'Debit')
+        sbi = AccountService.create_account(
+            self.company_id, 'SBI', 'SBI', 'Bank Accounts', 0.0, 'Debit')
+        # Contra 1: 03-Aug — SBI Dr 5000 / PhonePe Cr 5000
+        VoucherService.save_voucher(
+            self.company_id, 'Contra', date(2026, 8, 3),
+            [
+                {'account_id': sbi, 'debit_amount': 5000.0, 'credit_amount': 0.0},
+                {'account_id': phonepe, 'debit_amount': 0.0, 'credit_amount': 5000.0},
+            ],
+        )
+        # Contra 2: 05-Aug — PhonePe Dr 5000 / SBI Cr 5000
+        VoucherService.save_voucher(
+            self.company_id, 'Contra', date(2026, 8, 5),
+            [
+                {'account_id': phonepe, 'debit_amount': 5000.0, 'credit_amount': 0.0},
+                {'account_id': sbi, 'debit_amount': 0.0, 'credit_amount': 5000.0},
+            ],
+        )
+
+        full = cash_book_service.generate_bank_book(
+            self.company_id, date(2026, 8, 1), date(2026, 8, 31), phonepe)
+        self.assertEqual(full['opening_balance'], 5700.0)
+        balances = [(t['running_balance'], t['balance_type']) for t in full['transactions']]
+        self.assertEqual(balances, [(700.0, 'Debit'), (5700.0, 'Debit')])
+        self.assertEqual(full['closing_balance']['amount'], 5700.0)
+
+        mid = cash_book_service.generate_bank_book(
+            self.company_id, date(2026, 8, 4), date(2026, 8, 31), phonepe)
+        # 03-Aug contra is before the window: opening must be 700, not 5700.
+        self.assertEqual(mid['opening_balance'], 700.0)
+        self.assertEqual(mid['closing_balance']['amount'], 5700.0)
+        self.assertEqual(mid['transaction_count'], 1)
+
+    def test_sbi_existing_behavior_preserved(self):
+        """An account with a debit opening balance and no pre-period activity
+        keeps its exact opening balance and running balance unchanged."""
+        report = cash_book_service.generate_bank_book(
+            self.company_id, date(2026, 8, 1), date(2026, 8, 31))
+        self.assertEqual(report['opening_balance'], 50000.0)
+        self.assertEqual(report['closing_balance']['amount'], 50000.0)
 
     # ------------------------------------------------------------------ #
     # report totals

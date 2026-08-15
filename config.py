@@ -3,6 +3,7 @@ Expenzo Configuration Module
 Centralized settings, constants, dark/light theme design tokens, and application metadata.
 """
 
+import os
 from pathlib import Path
 
 # ==========================================
@@ -10,20 +11,34 @@ from pathlib import Path
 # ==========================================
 APP_NAME = "Expenzo"
 APP_SUBTITLE = "Accounting"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.0.0"
 
 # ==========================================
 # PATHS
 # ==========================================
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE_DIR = BASE_DIR / "database"
-DATABASE_NAME = "myxpense.db"
-DATABASE_PATH = DATABASE_DIR / DATABASE_NAME
 ASSETS_DIR = BASE_DIR / "assets"
 
-EXPORTS_DIR = BASE_DIR / "exports"
+# Per-user data directory. User data (database, exports) always lives OUTSIDE
+# the application installation folder so reinstalls/updates never touch it.
+#   - override for tests/portable use: EXPENZO_DATA_DIR env var
+#   - Windows: %APPDATA%\Expenzo
+#   - other platforms: ~/.local/share/Expenzo
+_ENV_DATA_DIR = os.environ.get("EXPENZO_DATA_DIR")
+if _ENV_DATA_DIR:
+    DATA_DIR = Path(_ENV_DATA_DIR)
+elif os.name == "nt" and os.environ.get("APPDATA"):
+    DATA_DIR = Path(os.environ["APPDATA"]) / "Expenzo"
+else:
+    DATA_DIR = Path.home() / ".local" / "share" / "Expenzo"
 
-# Ensure directories exist
+DATABASE_DIR = DATA_DIR / "database"
+DATABASE_NAME = "myxpense.db"
+DATABASE_PATH = DATABASE_DIR / DATABASE_NAME
+
+EXPORTS_DIR = DATA_DIR / "exports"
+
+# Ensure directories exist (now under the per-user data dir)
 DATABASE_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
