@@ -418,7 +418,17 @@
       "Shell(powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w /tmp/commandcode-1000/-mnt-d-wind-app-MyXpense/46af8989-f34d-4ad3-9a6b-ef3e6824cbe8/scratchpad/pyw_vs_py2.ps1)\" 2>&1 | tail -8)",
       "Shell(powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w /tmp/commandcode-1000/-mnt-d-wind-app-MyXpense/46af8989-f34d-4ad3-9a6b-ef3e6824cbe8/scratchpad/pyw_vs_py3.ps1)\" 2>&1 | tail -6)",
       "Shell(powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w /tmp/commandcode-1000/-mnt-d-wind-app-MyXpense/46af8989-f34d-4ad3-9a6b-ef3e6824cbe8/scratchpad/reinstall2.ps1)\" 2>&1 | tail -30)",
-      "Shell(powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w /tmp/commandcode-1000/-mnt-d-wind-app-MyXpense/46af8989-f34d-4ad3-9a6b-ef3e6824cbe8/scratchpad/final_check.ps1)\" 2>&1 | tail -6)"
+      "Shell(powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w /tmp/commandcode-1000/-mnt-d-wind-app-MyXpense/46af8989-f34d-4ad3-9a6b-ef3e6824cbe8/scratchpad/final_check.ps1)\" 2>&1 | tail -6)",
+      "Shell(powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$PWD\")/packaging/build_release.ps1\" 2>&1 | tail -10)",
+      "Shell(powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w /tmp/commandcode-1000/-mnt-d-wind-app-MyXpense/46af8989-f34d-4ad3-9a6b-ef3e6824cbe8/scratchpad/reinstall_new.ps1)\" 2>&1 | tail -8)",
+      "Shell(python -m pytest tests/test_dashboard_drilldowns.py -x -q 2 >& 1)",
+      "Shell(python3 -m pytest tests/test_dashboard_drilldowns.py -x -q 2 >& 1)",
+      "Shell(/mnt/d/wind app/MyXpense/.venv/bin/python:*)",
+      "Shell(cd /mnt/d/wind\\ app/MyXpense && for f in test_reports_hub_ui test_voucher_entry_ui test_bank_account_management_ui test_party_master_ui test_group_master_ui test_ledger_master_ui test_company_management_ui test_masters_navigation; do timeout 60 .venv/Scripts/python.exe -m pytest tests/$f.py -q > /tmp/uitest.log 2>&1; echo \"$f: exit=$? $(tail -1 /tmp/uitest.log)\"; done)",
+      "Shell(python -m pytest tests/test_dashboard_service.py tests/test_dashboard_drilldowns.py tests/test_date_control.py -q 2 >& 1)",
+      "Shell(command:*)",
+      "Shell(python3 -m pytest tests/test_dashboard_service.py tests/test_dashboard_drilldowns.py tests/test_date_control.py -q 2 >& 1)",
+      "Shell(python3 -m unittest tests.test_dashboard_service tests.test_dashboard_drilldowns tests.test_date_control -v 2 >& 1)"
     ],
     "deny": [],
     "defaultMode": "default"

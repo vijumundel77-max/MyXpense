@@ -120,6 +120,22 @@ class OutstandingReportUI:
         if callable(back):
             back()
 
+    def on_global_single_date(self, day) -> None:
+        """Global F2 hook: set the As-On date and regenerate."""
+        try:
+            self.as_on_date_var.set(day.strftime(config.DISPLAY_DATE_FORMAT))
+            self._generate_report()
+        except Exception:
+            pass
+
+    def on_global_date_period(self, from_date, to_date) -> None:
+        """Global Alt+F2 hook: use the period's end date as As-On, regenerate."""
+        try:
+            self.as_on_date_var.set(to_date.strftime(config.DISPLAY_DATE_FORMAT))
+            self._generate_report()
+        except Exception:
+            pass
+
     def _clear_filters(self) -> None:
         self.report_type_var.set("Outstanding")
         self.outstanding_type_var.set("Receivable")

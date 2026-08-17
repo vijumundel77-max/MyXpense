@@ -20,6 +20,8 @@ from services.voucher_service import (
     VOUCHER_RECEIPT,
     VOUCHER_CONTRA,
     VOUCHER_JOURNAL,
+    VOUCHER_SALES,
+    VOUCHER_PURCHASE,
     STATUS_CANCELLED,
     STATUS_POSTED,
 )
@@ -142,18 +144,182 @@ class TestVoucherService(unittest.TestCase):
         self.assertEqual(voucher['voucher_type'], VOUCHER_JOURNAL)
         self.assertEqual(voucher['voucher_number'], 'JV-0001')
 
+    # ------------------------------------------------------------------ #
+    # 6-voucher types: Sales / Purchase + per-type validation rules
+    # ------------------------------------------------------------------ #
+    def test_sales_voucher(self):
+        ok, message, voucher_id = VoucherService.save_voucher(
+            self.company_id, VOUCHER_SALES, date(2026, 8, 5),
+            [
+                {'account_id': self.acct['debtor'], 'debit_amount': 5000.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 5000.0},
+            ],
+            narration='Credit sale to Customer A',
+        )
+        self.assertTrue(ok, message)
+        voucher = VoucherService.get_voucher(voucher_id)
+        self.assertEqual(voucher['voucher_type'], VOUCHER_SALES)
+        self.assertEqual(voucher['voucher_number'], 'SV-0001')
+        totals = VoucherService.get_voucher_totals(voucher_id)
+        self.assertEqual(totals['debit_total'], 5000.0)
+        self.assertEqual(totals['credit_total'], 5000.0)
+
+    def test_purchase_voucher(self):
+        ok, message, voucher_id = VoucherService.save_voucher(
+            self.company_id, VOUCHER_PURCHASE, date(2026, 8, 6),
+            [
+                {'account_id': self.acct['purchases'], 'debit_amount': 8000.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['creditor'], 'debit_amount': 0.0, 'credit_amount': 8000.0},
+            ],
+            narration='Credit purchase from Supplier X',
+        )
+        self.assertTrue(ok, message)
+        voucher = VoucherService.get_voucher(voucher_id)
+        self.assertEqual(voucher['voucher_type'], VOUCHER_PURCHASE)
+        self.assertEqual(voucher['voucher_number'], 'PC-0001')
+
+    def test_sales_cash_receipt_allowed(self):
+        """A cash sale: Cash Dr / Sales Cr is a valid SALES voucher."""
+        ok, message, _ = VoucherService.save_voucher(
+            self.company_id, VOUCHER_SALES, date(2026, 8, 5),
+            [
+                {'account_id': self.acct['cash'], 'debit_amount': 250.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 250.0},
+            ],
+        )
+        self.assertTrue(ok, message)
+
+    def test_purchase_cash_payment_allowed(self):
+        """A cash purchase: Purchases Dr / Cash Cr is a valid PURCHASE."""
+        ok, message, _ = VoucherService.save_voucher(
+            self.company_id, VOUCHER_PURCHASE, date(2026, 8, 6),
+            [
+                {'account_id': self.acct['purchases'], 'debit_amount': 400.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['cash'], 'debit_amount': 0.0, 'credit_amount': 400.0},
+            ],
+        )
+        self.assertTrue(ok, message)
+
+    def test_contra_rejects_non_cash_bank(self):
+        ok, message, voucher_id = VoucherService.save_voucher(
+            self.company_id, VOUCHER_CONTRA, date(2026, 8, 3),
+            [
+                {'account_id': self.acct['expenses'], 'debit_amount': 200.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['cash'], 'debit_amount': 0.0, 'credit_amount': 200.0},
+            ],
+        )
+        self.assertFalse(ok)
+        self.assertIn('contra', message.lower())
+        self.assertIn('cash or bank', message.lower())
+        self.assertIsNone(voucher_id)
+
+    def test_journal_rejects_cash_bank(self):
+        ok, message, _ = VoucherService.save_voucher(
+            self.company_id, VOUCHER_JOURNAL, date(2026, 8, 4),
+            [
+                {'account_id': self.acct['cash'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+        )
+        self.assertFalse(ok)
+        self.assertIn('journal', message.lower())
+        self.assertIn('cash or bank', message.lower())
+
+    def test_payment_requires_cash_bank_credit(self):
+        ok, message, _ = VoucherService.save_voucher(
+            self.company_id, VOUCHER_PAYMENT, date(2026, 8, 1),
+            [
+                {'account_id': self.acct['expenses'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['creditor'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+        )
+        self.assertFalse(ok)
+        self.assertIn('cash or bank', message.lower())
+
+    def test_receipt_requires_cash_bank_debit(self):
+        ok, message, _ = VoucherService.save_voucher(
+            self.company_id, VOUCHER_RECEIPT, date(2026, 8, 2),
+            [
+                {'account_id': self.acct['debtor'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+        )
+        self.assertFalse(ok)
+        self.assertIn('cash or bank', message.lower())
+
+    def test_sales_requires_income_credit(self):
+        ok, message, _ = VoucherService.save_voucher(
+            self.company_id, VOUCHER_SALES, date(2026, 8, 5),
+            [
+                {'account_id': self.acct['debtor'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['creditor'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+        )
+        self.assertFalse(ok)
+        self.assertIn('sales/income', message.lower())
+
+    def test_purchase_requires_expense_debit(self):
+        ok, message, _ = VoucherService.save_voucher(
+            self.company_id, VOUCHER_PURCHASE, date(2026, 8, 6),
+            [
+                {'account_id': self.acct['sales'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['creditor'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+        )
+        self.assertFalse(ok)
+        self.assertIn('purchase / expense / asset', message.lower())
+
+    def test_get_voucher_by_id_alias(self):
+        ok, _, voucher_id = VoucherService.save_voucher(
+            self.company_id, VOUCHER_SALES, date(2026, 8, 5),
+            [
+                {'account_id': self.acct['debtor'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+        )
+        self.assertTrue(ok)
+        self.assertIsNotNone(voucher_id)
+        fetched = VoucherService.get_voucher_by_id(voucher_id)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched['id'], voucher_id)
+
     def test_voucher_numbering_per_type(self):
+        # Type-appropriate balanced entry pairs for each voucher type.
+        entries_by_type = {
+            VOUCHER_PAYMENT: [
+                {'account_id': self.acct['expenses'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['cash'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+            VOUCHER_RECEIPT: [
+                {'account_id': self.acct['cash'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+            VOUCHER_CONTRA: [
+                {'account_id': self.acct['bank'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['cash'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+            VOUCHER_JOURNAL: [
+                {'account_id': self.acct['debtor'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+            VOUCHER_SALES: [
+                {'account_id': self.acct['debtor'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+            VOUCHER_PURCHASE: [
+                {'account_id': self.acct['purchases'], 'debit_amount': 100.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['creditor'], 'debit_amount': 0.0, 'credit_amount': 100.0},
+            ],
+        }
         for vtype, prefix in [(VOUCHER_PAYMENT, 'PV'), (VOUCHER_RECEIPT, 'RV'),
-                              (VOUCHER_CONTRA, 'CV'), (VOUCHER_JOURNAL, 'JV')]:
+                              (VOUCHER_CONTRA, 'CV'), (VOUCHER_JOURNAL, 'JV'),
+                              (VOUCHER_SALES, 'SV'), (VOUCHER_PURCHASE, 'PC')]:
             for i in range(1, 4):
                 ok, _, _ = VoucherService.save_voucher(
                     self.company_id, vtype, date(2026, 8, 1),
-                    [
-                        {'account_id': self.acct['cash'], 'debit_amount': 100.0, 'credit_amount': 0.0},
-                        {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 100.0},
-                    ],
+                    [dict(e) for e in entries_by_type[vtype]],
                 )
-                self.assertTrue(ok)
+                self.assertTrue(ok, f"{vtype} entry rejected")
                 number = VoucherService.next_voucher_number(self.company_id, vtype)
                 self.assertEqual(number, f"{prefix}-{i + 1:04d}")
 

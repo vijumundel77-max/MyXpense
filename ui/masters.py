@@ -1,7 +1,7 @@
 """
 Expenzo — Masters Hub
 Launcher for the master screens: Company, Groups, Ledgers (Chart of
-Accounts), Parties, and Bank Accounts.
+Accounts), and Parties. Bank ledgers are managed under Ledgers.
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ class MastersFrame(ctk.CTkFrame):
             header, text="Masters", font=ctk.CTkFont(size=config.FONT_TITLE_SIZE, weight="bold"),
         ).pack(side="left")
         ctk.CTkLabel(
-            header, text="Companies, groups, ledgers, parties & bank accounts",
+            header, text="Companies, groups, ledgers & parties",
             font=ctk.CTkFont(size=12), text_color=config.COLOR_TEXT_SECONDARY,
         ).pack(side="left", padx=(config.SPACING_MD, 0))
         company_name = self._company_name()
@@ -92,12 +92,6 @@ class MastersFrame(ctk.CTkFrame):
                 "icon": "▥",
                 "open": self._open_parties,
             },
-            {
-                "title": "Bank Accounts",
-                "subtitle": "Bank account master",
-                "icon": "▨",
-                "open": self._open_bank_accounts,
-            },
         ]
 
         for index, card in enumerate(cards):
@@ -108,7 +102,7 @@ class MastersFrame(ctk.CTkFrame):
                         pady=config.SPACING_SM)
         for column in range(2):
             self.cards_frame.grid_columnconfigure(column, weight=1)
-        for row in range(3):
+        for row in range(2):
             self.cards_frame.grid_rowconfigure(row, weight=1)
 
     def _create_card(self, parent, card: Dict[str, object]) -> ctk.CTkFrame:
@@ -213,10 +207,6 @@ class MastersFrame(ctk.CTkFrame):
     def _open_parties(self) -> None:
         from ui.party_master import PartyMasterUI
         self._show_screen(lambda parent: PartyMasterUI(parent, self._require_company_id()))
-
-    def _open_bank_accounts(self) -> None:
-        from ui.bank_account_management import BankAccountManagementUI
-        self._show_screen(lambda parent: BankAccountManagementUI(parent, self._require_company_id()))
 
     def _handle_company_switched(self, company_id: int) -> None:
         self.company_id = int(company_id)

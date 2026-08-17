@@ -105,7 +105,7 @@ class MastersNavigationTestCase(unittest.TestCase):
     # ------------------------------------------------------------------ #
     def test_cards_visible_on_hub(self):
         self.assertTrue(_is_packed(self.hub.cards_frame))
-        self.assertEqual(len(_find_open_buttons(self.hub)), 5)
+        self.assertEqual(len(_find_open_buttons(self.hub)), 4)
 
     def test_cards_hidden_while_screen_open_and_restored_on_esc(self):
         for label, opener in [
@@ -113,7 +113,6 @@ class MastersNavigationTestCase(unittest.TestCase):
             ("Groups", self.hub._open_groups),
             ("Ledgers", self.hub._open_ledgers),
             ("Parties", self.hub._open_parties),
-            ("Bank Accounts", self.hub._open_bank_accounts),
         ]:
             opener()
             self.assertIsNotNone(self.hub.current_ui, f"{label}: screen did not open")
@@ -136,7 +135,7 @@ class MastersNavigationTestCase(unittest.TestCase):
             self.hub.on_keyboard_back()
             self.assertTrue(_is_packed(self.hub.cards_frame))
             self.assertEqual(
-                len(_find_open_buttons(self.hub)), 5,
+                len(_find_open_buttons(self.hub)), 4,
                 "duplicate Open buttons after repeated open/Esc",
             )
 
@@ -149,13 +148,12 @@ class MastersNavigationTestCase(unittest.TestCase):
             "Groups": "GroupMasterUI",
             "Ledgers": "LedgerMasterUI",
             "Parties": "PartyMasterUI",
-            "Bank Accounts": "BankAccountManagementUI",
         }
         buttons = _find_open_buttons(self.hub)
-        self.assertEqual(len(buttons), 5)
+        self.assertEqual(len(buttons), 4)
         # Order matches the card definitions: Company, Groups, Ledgers,
-        # Parties, Bank Accounts.
-        ordered = ["Company", "Groups", "Ledgers", "Parties", "Bank Accounts"]
+        # Parties.
+        ordered = ["Company", "Groups", "Ledgers", "Parties"]
         for label, button in zip(ordered, buttons):
             button.invoke()
             self.assertIsNotNone(self.hub.current_ui)
@@ -191,7 +189,6 @@ class MastersNavigationTestCase(unittest.TestCase):
             ("Groups", self.hub._open_groups, "company_id"),
             ("Ledgers", self.hub._open_ledgers, "company_id"),
             ("Parties", self.hub._open_parties, "company_id"),
-            ("Bank Accounts", self.hub._open_bank_accounts, "company_id"),
         ]:
             opener()
             ui = self.hub.current_ui
@@ -204,7 +201,7 @@ class MastersNavigationTestCase(unittest.TestCase):
     def test_missing_company_id_fails_safely(self):
         self.hub.company_id = None
         for opener in (self.hub._open_groups, self.hub._open_ledgers,
-                       self.hub._open_parties, self.hub._open_bank_accounts):
+                       self.hub._open_parties):
             with self.assertRaises(ValueError):
                 opener()
             self.assertIsNone(self.hub.current_ui)

@@ -37,12 +37,14 @@ class LedgerPicker(ctk.CTkFrame):
         width: int = 320,
         on_selected: Optional[Callable[[int], None]] = None,
         groups: Optional[List[str]] = None,
+        on_add_new: Optional[Callable[[], None]] = None,
     ):
         super().__init__(master, fg_color="transparent")
         self.company_id = company_id
         self.width = width
         self.on_selected = on_selected
         self.groups = groups  # Optional list of account groups to restrict to.
+        self.on_add_new = on_add_new  # Optional "+ New ledger" callback.
 
         self.entry_var = tk.StringVar()
         self.entry_var.trace_add("write", self._on_search)
@@ -51,7 +53,7 @@ class LedgerPicker(ctk.CTkFrame):
             corner_radius=config.INPUT_CORNER_RADIUS,
             font=ctk.CTkFont(size=config.FONT_BODY_SIZE),
         )
-        self.entry.pack(fill="x")
+        self.entry.pack(side="left", fill="x", expand=True)
         self.entry.bind("<KeyRelease>", self._on_search_event)
         self.entry.bind("<Down>", lambda _e: self._move(1))
         self.entry.bind("<Up>", lambda _e: self._move(-1))
@@ -62,8 +64,21 @@ class LedgerPicker(ctk.CTkFrame):
         self.entry.bind("<FocusIn>", self._on_focus_in)
         self.entry.bind("<FocusOut>", self._on_focus_out)
 
+        # "+ New" affordance: opens the Add-Ledger modal when one is wired.
+        self.new_btn = ctk.CTkButton(
+            self, text="+", width=28, height=28,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            fg_color=config.COLOR_BG_TERTIARY, hover_color=config.COLOR_PRIMARY_HOVER,
+            text_color=config.COLOR_TEXT_PRIMARY,
+            command=self._on_add_new,
+        )
+        self.new_btn.pack(side="right", padx=(4, 0))
+        self.new_btn.configure(text="+")
+        self._update_new_btn_visibility()
+
         self.results: List[Dict[str, Any]] = []
         self._selected: Optional[Dict[str, Any]] = None
+        self.exclude_groups: Optional[List[str]] = None
 
         # Popup result list (a Toplevel owned by this picker).
         self.popup: Optional[tk.Toplevel] = None
@@ -71,6 +86,39 @@ class LedgerPicker(ctk.CTkFrame):
 
         self._build_popup()
         self._load_all()
+
+    def _update_new_btn_visibility(self) -> None:
+        try:
+            if self.on_add_new is not None:
+                self.new_btn.pack(side="right", padx=(4, 0))
+            else:
+                self.new_btn.pack_forget()
+        except Exception:
+            pass
+
+    def _on_add_new(self) -> None:
+        if self.on_add_new is not None:
+            try:
+                self.on_add_new()
+            except Exception:
+                pass
+
+    def set_group_filter(self, groups: Optional[List[str]],
+                         exclude_groups: Optional[List[str]] = None) -> None:
+        """Restrict the picker to the given account groups (None = all) and/or
+        exclude specific groups (e.g. hide Cash/Bank for Journal)."""
+        self.groups = list(groups) if groups else None
+        self.exclude_groups = list(exclude_groups) if exclude_groups else None
+        self._load_all()
+        self._refresh_results(self.entry_var.get())
+
+    def refresh(self) -> None:
+        """Reload ledgers from the database (call after creating a ledger)."""
+        selected_id = self.get_account()
+        self._load_all()
+        self._refresh_results(self.entry_var.get())
+        if selected_id is not None:
+            self.set_account(selected_id)
 
     # ------------------------------------------------------------------ #
     # popup
@@ -121,6 +169,11 @@ class LedgerPicker(ctk.CTkFrame):
             self.results = []
         if self.groups:
             self.results = [a for a in self.results if a.get('account_group') in self.groups]
+        if getattr(self, 'exclude_groups', None):
+            self.results = [
+                a for a in self.results
+                if a.get('account_group') not in self.exclude_groups
+            ]
 
     @staticmethod
     def account_label(account: Dict[str, Any]) -> str:

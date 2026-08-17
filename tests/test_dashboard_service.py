@@ -285,6 +285,75 @@ class TestDashboardService(unittest.TestCase):
         self.assertEqual(set(data.keys()), expected_keys)
         self.assertEqual(len(data['recent_vouchers']), 1)
 
+    # ------------------------------------------------------------------ #
+    # as-of-date metrics (global F2 single date)
+    # ------------------------------------------------------------------ #
+    def test_get_dashboard_as_of_date(self):
+        """All dashboard metrics recompute for the selected reference date:
+        entries after that date are excluded, not just the vouchers list."""
+        as_on = date.today() - timedelta(days=10)
+        VoucherService.save_voucher(
+            self.company_id, 'Receipt', date.today(),
+            [
+                {'account_id': self.acct['cash'], 'debit_amount': 2000.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 2000.0},
+            ],
+        )
+        data = dashboard_service.get_dashboard(self.company_id, as_on)
+        # The dated entry happened after as-on, so it must not count.
+        self.assertEqual(data['as_on'], as_on.isoformat())
+        self.assertEqual(data['cash_balance'], 10000.0)
+        self.assertEqual(data['today_receipts'], 0.0)
+        # Recent vouchers stay the latest list (unchanged behavior).
+        self.assertEqual(len(data['recent_vouchers']), 1)
+
+    def test_month_receipts_respect_as_on_day(self):
+        """Month receipts/payments detail is cut off at the selected day."""
+        today = date.today()
+        first = date(today.year, today.month, 1)
+        mid_month = min(first + timedelta(days=9), today)
+        VoucherService.save_voucher(
+            self.company_id, 'Receipt', first,
+            [
+                {'account_id': self.acct['cash'], 'debit_amount': 700.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 700.0},
+            ],
+        )
+        VoucherService.save_voucher(
+            self.company_id, 'Receipt', today,
+            [
+                {'account_id': self.acct['cash'], 'debit_amount': 1300.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 1300.0},
+            ],
+        )
+        mid = mid_month
+        receipts = DashboardService.month_receipts(self.company_id, mid)
+        self.assertEqual(
+            round(sum(r['amount'] for r in receipts), 2),
+            DashboardService.month_totals(self.company_id, mid)['receipts'])
+        self.assertEqual(len(receipts), 1)  # only the first-of-month entry
+
+    def test_month_totals_respect_as_on_day(self):
+        today = date.today()
+        first = date(today.year, today.month, 1)
+        mid_month = min(first + timedelta(days=9), today)
+        VoucherService.save_voucher(
+            self.company_id, 'Receipt', first,
+            [
+                {'account_id': self.acct['cash'], 'debit_amount': 700.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 700.0},
+            ],
+        )
+        VoucherService.save_voucher(
+            self.company_id, 'Receipt', today,
+            [
+                {'account_id': self.acct['cash'], 'debit_amount': 1300.0, 'credit_amount': 0.0},
+                {'account_id': self.acct['sales'], 'debit_amount': 0.0, 'credit_amount': 1300.0},
+            ],
+        )
+        totals = DashboardService.month_totals(self.company_id, mid_month)
+        self.assertEqual(totals['receipts'], 700.0)
+
 
 if __name__ == '__main__':
     unittest.main()

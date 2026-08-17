@@ -22,20 +22,42 @@ VOUCHER_PAYMENT = 'Payment'
 VOUCHER_RECEIPT = 'Receipt'
 VOUCHER_CONTRA = 'Contra'
 VOUCHER_JOURNAL = 'Journal'
+VOUCHER_SALES = 'Sales'
+VOUCHER_PURCHASE = 'Purchase'
 
-VOUCHER_TYPES = (VOUCHER_PAYMENT, VOUCHER_RECEIPT, VOUCHER_CONTRA, VOUCHER_JOURNAL)
+VOUCHER_TYPES = (
+    VOUCHER_PAYMENT,
+    VOUCHER_RECEIPT,
+    VOUCHER_CONTRA,
+    VOUCHER_JOURNAL,
+    VOUCHER_SALES,
+    VOUCHER_PURCHASE,
+)
 
 VOUCHER_TYPE_PREFIX = {
     VOUCHER_PAYMENT: 'PV',
     VOUCHER_RECEIPT: 'RV',
     VOUCHER_CONTRA: 'CV',
     VOUCHER_JOURNAL: 'JV',
+    VOUCHER_SALES: 'SV',
+    VOUCHER_PURCHASE: 'PC',
 }
 
 STATUS_POSTED = 'Posted'
 STATUS_CANCELLED = 'Cancelled'
 
 ACTIVE_STATUSES = (STATUS_POSTED,)
+
+# Ledger groups that represent physical money (used by Contra / Journal
+# rules).  Kept in sync with the seeded Chart of Accounts group names.
+CASH_GROUPS = ('Cash-in-Hand',)
+BANK_GROUPS = ('Bank Accounts',)
+CASH_BANK_GROUPS = CASH_GROUPS + BANK_GROUPS
+PARTY_GROUPS = ('Sundry Debtors', 'Sundry Creditors')
+INCOME_GROUPS = ('Sales Accounts', 'Direct Incomes', 'Indirect Incomes',
+                 'Retained Earnings')
+EXPENSE_GROUPS = ('Purchase Accounts', 'Direct Expenses', 'Indirect Expenses',
+                  'Misc. Expenses (ASSET)')
 
 
 class VoucherValidationError(Exception):
@@ -152,18 +174,67 @@ class VoucherService:
         return f"{prefix}-{max_seq + 1:04d}"
 
     @staticmethod
+    def _account_group(account_id: int) -> str:
+        """The account_group for a ledger id (cached per call-site)."""
+        row = db.fetch_one("SELECT account_group FROM accounts WHERE id = ?", (account_id,))
+        return str(VoucherService._row_value(row, 'account_group', '') or '')
+
+    @staticmethod
+    def _group_is_cash_bank(group: str) -> bool:
+        return str(group or '').strip().lower() in {g.lower() for g in CASH_BANK_GROUPS}
+
+    @staticmethod
+    def _group_is_party(group: str) -> bool:
+        return str(group or '').strip().lower() in {g.lower() for g in PARTY_GROUPS}
+
+    @staticmethod
+    def _group_is_income(group: str) -> bool:
+        return str(group or '').strip().lower() in {g.lower() for g in INCOME_GROUPS}
+
+    @staticmethod
+    def _group_is_expense_or_asset(group: str) -> bool:
+        low = str(group or '').strip().lower()
+        if low in {g.lower() for g in EXPENSE_GROUPS}:
+            return True
+        if low in ('fixed assets', 'current assets', 'investments',
+                   'loans & advances', 'stock-in-hand', 'capital account'):
+            return True
+        return False
+
+    @staticmethod
     def _validate_entries(
         company_id: int,
         entries: List[Dict[str, Any]],
-        is_contra: bool = False,
+        voucher_type: str = "",
     ) -> None:
-        """Validate a double-entry list. Raises VoucherValidationError."""
+        """Validate a double-entry list. Raises VoucherValidationError.
+
+        Universal rules (all voucher types):
+          - non-empty, amounts > 0, no negatives, no entry that is both
+            Dr and Cr, account exists / active / owned by the company
+          - sum(DEBIT) == sum(CREDIT)
+
+        Per-type rules (the 6-voucher Tally-style model):
+          - CONTRA   : every ledger must be Cash/Bank.
+          - PAYMENT  : >= 1 Credit on Cash/Bank and >= 1 Debit on a
+                       non-Cash/Bank ledger (expense / party / asset).
+          - RECEIPT  : >= 1 Debit on Cash/Bank and >= 1 Credit on a
+                       non-Cash/Bank ledger (income / party / capital).
+          - JOURNAL  : no Cash or Bank ledger allowed.
+          - SALES    : >= 1 Credit on a Sales/Income ledger and >= 1 Debit
+                       on a party (Sundry Debtor) or Cash/Bank ledger.
+          - PURCHASE : >= 1 Debit on a Purchase/Expense/Asset ledger and
+                       >= 1 Credit on a party (Sundry Creditor) or Cash/Bank.
+        """
         if not entries:
             raise VoucherValidationError("At least one debit and one credit entry are required.")
 
         debit_total = 0.0
         credit_total = 0.0
         account_names: Dict[int, str] = {}
+        entry_groups: Dict[int, str] = {}
+        debit_entries: List[Dict[str, Any]] = []
+        credit_entries: List[Dict[str, Any]] = []
 
         for entry in entries:
             account_id = entry.get('account_id')
@@ -190,20 +261,82 @@ class VoucherService:
                 raise VoucherValidationError(
                     f"Account '{account['name']}' is inactive and cannot be used.")
             account_names[account_id] = account['name']
+            group = VoucherService._account_group(account_id)
+            entry_groups[account_id] = group
 
             debit_total += debit
             credit_total += credit
-
-        if is_contra:
-            # A contra moves money between cash/bank — both sides required,
-            # single debit + single credit enforced by the UI.
-            pass
+            if debit > 0:
+                debit_entries.append({'account_id': account_id, 'amount': debit,
+                                      'group': group})
+            if credit > 0:
+                credit_entries.append({'account_id': account_id, 'amount': credit,
+                                       'group': group})
 
         if debit_total <= 0 and credit_total <= 0:
             raise VoucherValidationError("Amount must be greater than zero.")
         if round(debit_total, 2) != round(credit_total, 2):
             raise VoucherValidationError(
                 f"Voucher is not balanced: Debit {debit_total:,.2f} != Credit {credit_total:,.2f}")
+
+        # ---- per-type rules ------------------------------------------------- #
+        if voucher_type == VOUCHER_CONTRA:
+            for account_id in entry_groups:
+                if not VoucherService._group_is_cash_bank(entry_groups[account_id]):
+                    raise VoucherValidationError(
+                        f"CONTRA allows only Cash or Bank ledgers — "
+                        f"'{account_names[account_id]}' belongs to "
+                        f"'{entry_groups[account_id]}'.")
+
+        elif voucher_type == VOUCHER_JOURNAL:
+            for account_id in entry_groups:
+                if VoucherService._group_is_cash_bank(entry_groups[account_id]):
+                    raise VoucherValidationError(
+                        f"JOURNAL cannot use Cash or Bank ledgers — "
+                        f"'{account_names[account_id]}' is a "
+                        f"'{entry_groups[account_id]}' ledger.")
+
+        elif voucher_type == VOUCHER_PAYMENT:
+            if not any(VoucherService._group_is_cash_bank(e['group']) for e in credit_entries):
+                raise VoucherValidationError(
+                    "PAYMENT requires at least one Credit entry on a Cash or Bank ledger.")
+            if not any(not VoucherService._group_is_cash_bank(e['group']) for e in debit_entries):
+                raise VoucherValidationError(
+                    "PAYMENT requires at least one Debit entry on an "
+                    "expense / party / asset ledger.")
+
+        elif voucher_type == VOUCHER_RECEIPT:
+            if not any(VoucherService._group_is_cash_bank(e['group']) for e in debit_entries):
+                raise VoucherValidationError(
+                    "RECEIPT requires at least one Debit entry on a Cash or Bank ledger.")
+            if not any(not VoucherService._group_is_cash_bank(e['group']) for e in credit_entries):
+                raise VoucherValidationError(
+                    "RECEIPT requires at least one Credit entry on an "
+                    "income / party / capital ledger.")
+
+        elif voucher_type == VOUCHER_SALES:
+            if not any(VoucherService._group_is_income(e['group']) for e in credit_entries):
+                raise VoucherValidationError(
+                    "SALES requires at least one Credit entry on a Sales/Income ledger.")
+            if not any(VoucherService._group_is_cash_bank(e['group'])
+                       or VoucherService._group_is_party(e['group'])
+                       for e in debit_entries):
+                raise VoucherValidationError(
+                    "SALES requires at least one Debit entry on a party "
+                    "(Sundry Debtor) or Cash/Bank ledger.")
+
+        elif voucher_type == VOUCHER_PURCHASE:
+            if not any(VoucherService._group_is_expense_or_asset(e['group'])
+                       for e in debit_entries):
+                raise VoucherValidationError(
+                    "PURCHASE requires at least one Debit entry on a "
+                    "purchase / expense / asset ledger.")
+            if not any(VoucherService._group_is_cash_bank(e['group'])
+                       or VoucherService._group_is_party(e['group'])
+                       for e in credit_entries):
+                raise VoucherValidationError(
+                    "PURCHASE requires at least one Credit entry on a party "
+                    "(Sundry Creditor) or Cash/Bank ledger.")
 
     @staticmethod
     def save_voucher(
@@ -223,8 +356,7 @@ class VoucherService:
             return False, "Invalid voucher date.", None
 
         try:
-            VoucherService._validate_entries(
-                company_id, entries, is_contra=(voucher_type == VOUCHER_CONTRA))
+            VoucherService._validate_entries(company_id, entries, voucher_type=voucher_type)
         except VoucherValidationError as exc:
             return False, exc.message, None
 
@@ -305,8 +437,7 @@ class VoucherService:
             return False, f"Invalid voucher type: {voucher_type}"
 
         try:
-            VoucherService._validate_entries(
-                company_id, entries, is_contra=(voucher_type == VOUCHER_CONTRA))
+            VoucherService._validate_entries(company_id, entries, voucher_type=voucher_type)
         except VoucherValidationError as exc:
             return False, exc.message
 
@@ -505,6 +636,14 @@ class VoucherService:
             return False, "Voucher belongs to a different company."
         db.execute("DELETE FROM vouchers WHERE id = ?", (voucher_id,))
         return True, f"Voucher {existing['voucher_number']} deleted."
+
+    # ------------------------------------------------------------------ #
+    # Tally-style API alias
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def get_voucher_by_id(voucher_id: int) -> Optional[dict]:
+        """Alias for ``get_voucher`` (fetch a voucher by id)."""
+        return VoucherService.get_voucher(voucher_id)
 
 
 voucher_service = VoucherService()

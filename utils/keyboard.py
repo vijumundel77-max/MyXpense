@@ -74,7 +74,7 @@ def _find_save_method(view: Any) -> Optional[Callable[[], Any]]:
     if view is None:
         return None
     for name in ("on_keyboard_save", "_save_voucher", "_save_company", "_save_group",
-                 "_save_ledger", "_save_party", "_save_bank_account", "_save_transaction",
+                 "_save_ledger", "_save_party", "_save_transaction",
                  "_save"):
         method = getattr(view, name, None)
         if callable(method):
@@ -96,7 +96,7 @@ def _find_delete_method(view: Any) -> Optional[Callable[[], Any]]:
     if view is None:
         return None
     for name in ("on_keyboard_delete", "_delete_voucher", "_delete_company", "_delete_group",
-                 "_delete_ledger", "_delete_party", "_delete_bank_account", "_delete_transaction",
+                 "_delete_ledger", "_delete_party", "_delete_transaction",
                  "_delete"):
         method = getattr(view, name, None)
         if callable(method):
@@ -151,6 +151,14 @@ def install_shortcuts(root: tk.Misc, get_view: Callable[[], Any]) -> None:
             save()
         return "break"
 
+    def _on_ctrl_a(_event=None) -> str:
+        # Ctrl+A: save (Tally-style "A" for Accept).  Falls back to the same
+        # save dispatch as Ctrl+S.
+        save = _find_save_method(get_view())
+        if save:
+            save()
+        return "break"
+
     def _on_ctrl_n(_event=None) -> str:
         new = _find_new_method(get_view())
         if new:
@@ -172,6 +180,16 @@ def install_shortcuts(root: tk.Misc, get_view: Callable[[], Any]) -> None:
         refresh = _find_refresh_method(get_view())
         if refresh:
             refresh()
+        return "break"
+
+    def _on_f2(_event=None) -> str:
+        # F2: Global single-date selection.
+        _open_global_date_dialog(root, get_view, period=False)
+        return "break"
+
+    def _on_alt_f2(_event=None) -> str:
+        # Alt+F2: Global date-period selection.
+        _open_global_date_dialog(root, get_view, period=True)
         return "break"
 
     def _on_delete(_event=None) -> str:
@@ -220,11 +238,15 @@ def install_shortcuts(root: tk.Misc, get_view: Callable[[], Any]) -> None:
     for seq, handler in [
         ("<Control-s>", _on_ctrl_s),
         ("<Control-S>", _on_ctrl_s),
+        ("<Control-a>", _on_ctrl_a),
+        ("<Control-A>", _on_ctrl_a),
         ("<Control-n>", _on_ctrl_n),
         ("<Control-N>", _on_ctrl_n),
         ("<Control-f>", _on_ctrl_f),
         ("<Control-F>", _on_ctrl_f),
         ("<F5>", _on_f5),
+        ("<F2>", _on_f2),
+        ("<Alt-F2>", _on_alt_f2),
         ("<Delete>", _on_delete),
         ("<Escape>", _on_escape),
         ("<Alt-F4>", _on_alt_f4),
@@ -238,6 +260,44 @@ def install_shortcuts(root: tk.Misc, get_view: Callable[[], Any]) -> None:
 def install_popup_escape(popup: tk.Toplevel) -> None:
     """Esc closes a popup window."""
     popup.bind("<Escape>", lambda _e: popup.destroy())
+
+
+def _open_global_date_dialog(root: tk.Misc, get_view: Callable[[], Any],
+                             period: bool) -> None:
+    """Open the global date dialog (F2 single / Alt+F2 period) modal.
+
+    Truly modal: the dialog grabs all input so the underlying screen is
+    blocked until Enter (Apply) or Esc (Cancel).  On Apply, the chosen
+    date/period is dispatched to the active view via the shared
+    ``date_control`` service.
+    """
+    try:
+        from services.date_control_service import date_control
+        from ui.date_control_dialog import show_date_dialog, show_date_period_dialog
+
+        view = get_view()
+        company_id = getattr(root, "current_company_id", None)
+        if company_id is None:
+            try:
+                from database.database import db
+                row = db.fetch_one("SELECT id FROM companies ORDER BY id LIMIT 1")
+                company_id = int(row["id"]) if row else 1
+            except Exception:
+                company_id = 1
+
+        def _on_apply(*_args) -> None:
+            try:
+                date_control.apply_to(view, company_id)
+            except Exception:
+                pass
+
+        if period:
+            show_date_period_dialog(root, _on_apply)
+        else:
+            show_date_dialog(root, _on_apply)
+    except Exception:
+        # Never let a shortcut hiccup break the app.
+        pass
 
 
 def add_shortcut_bar(parent, shortcuts: list[tuple[str, str]]) -> None:

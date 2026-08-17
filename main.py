@@ -31,7 +31,6 @@ from services.company_service import CompanyService
 from ui.dashboard import DashboardFrame
 from ui.reports import show_reports
 from ui.masters import MastersFrame
-from ui.bank_account_management import BankAccountManagementUI
 from ui.vouchers import VouchersFrame
 from ui.settings import SettingsFrame
 from utils import keyboard, theme
@@ -266,7 +265,6 @@ class ExpenzoApp(ctk.CTk):
 
         self._sidebar_section("MASTERS")
         self._add_sidebar_button("Masters", "▧", self.show_masters)
-        self._add_sidebar_button("Bank Accounts", "▨", self.show_bank_accounts)
 
         self._sidebar_section("REPORTS")
         self._add_sidebar_button("Reports", "▥", self.show_reports)
@@ -287,9 +285,8 @@ class ExpenzoApp(ctk.CTk):
             "dashboard": 0,
             "vouchers": 1,
             "masters": 2,
-            "bank_accounts": 3,
-            "reports": 4,
-            "settings": 5,
+            "reports": 3,
+            "settings": 4,
         }
         active_index = mapping.get(name, -1)
         accent = _sidebar_accent(config.SIDEBAR_ACCENT, config.LIGHT_SIDEBAR_ACCENT)
@@ -503,12 +500,6 @@ class ExpenzoApp(ctk.CTk):
             "masters",
         )
         self._set_active_nav("masters")
-
-    def show_bank_accounts(self) -> None:
-        self._clear_content()
-        bank_ui = BankAccountManagementUI(self.content_frame)
-        self._set_view(bank_ui.main_frame, "bank_accounts", view_object=bank_ui)
-        self._set_active_nav("bank_accounts")
 
     def show_reports(self) -> None:
         self._clear_content()

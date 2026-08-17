@@ -187,8 +187,15 @@ class DatePicker:
                 return
             except Exception:
                 pass
+        toplevel = self.parent.winfo_toplevel()
+        # Only hide the MAIN application window while the calendar is open.
+        # Modal dialogs (the global F2/Alt+F2 date windows, voucher date
+        # field, etc.) must stay visible — withdrawing them would strand the
+        # user on a hidden dialog that never comes back.
+        is_main = toplevel.__class__.__name__ in ("CTk", "Tk")
         try:
-            self.parent.winfo_toplevel().withdraw()
+            if is_main:
+                toplevel.withdraw()
         except Exception:
             pass
         popup = ctk.CTkToplevel(self.parent)
@@ -196,9 +203,20 @@ class DatePicker:
         popup.geometry("340x380")
         popup.resizable(False, False)
         popup.configure(fg_color=config.COLOR_BG_SECONDARY)
-        popup.transient(self.parent.winfo_toplevel())
+        popup.transient(toplevel)
         popup.grab_set()
         self._popup = popup
+
+        def _restore_main() -> None:
+            """Bring the main application window back after the calendar
+            popup closes (it was hidden by the old behavior)."""
+            try:
+                if is_main and toplevel.winfo_exists():
+                    toplevel.deiconify()
+                    toplevel.lift()
+                    toplevel.focus_force()
+            except Exception:
+                pass
 
         now = self._parse(self.var.get())
         view_year, view_month = now.year, now.month
@@ -274,6 +292,7 @@ class DatePicker:
                     except Exception:
                         pass
                     finally:
+                        _restore_main()
                         try:
                             popup.destroy()
                         except Exception:
@@ -297,16 +316,17 @@ class DatePicker:
             corner_radius=config.BUTTON_CORNER_RADIUS,
             command=lambda: (self.var.set(self._format(date.today())),
                              self.on_change() if self.on_change else None,
+                             _restore_main(),
                              popup.destroy()),
         ).pack(side="left")
         ctk.CTkButton(
             footer, text="Cancel", width=80, height=30,
             corner_radius=config.BUTTON_CORNER_RADIUS,
             fg_color="transparent", border_width=1,
-            command=popup.destroy,
+            command=lambda: (_restore_main(), popup.destroy()),
         ).pack(side="right")
 
-        popup.bind("<Escape>", lambda _e: popup.destroy())
+        popup.bind("<Escape>", lambda _e: (_restore_main(), popup.destroy()))
         _draw(view_year, view_month)
         popup.after(50, lambda: (popup.lift(), popup.focus_set()))
 

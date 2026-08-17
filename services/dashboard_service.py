@@ -111,6 +111,169 @@ class DashboardService:
         first = date(today.year, today.month, 1)
         return DashboardService._book_totals(company_id, first, today)
 
+    _BOOK_GROUPS = ('Cash-in-Hand', 'Bank Accounts')
+
+    @staticmethod
+    def _active_accounts_in_group(company_id: int, group: str) -> List[Dict[str, Any]]:
+        """Active accounts in a ledger group (read-only list for drill-downs)."""
+        rows = db.fetch_all(
+            """
+            SELECT id, name, code FROM accounts
+            WHERE company_id = ? AND LOWER(account_group) = LOWER(?) AND is_active = 1
+            ORDER BY name
+            """,
+            (company_id, group),
+        )
+        return [
+            {
+                'id': DashboardService._row_value(row, 'id'),
+                'name': DashboardService._row_value(row, 'name', ''),
+                'code': DashboardService._row_value(row, 'code', ''),
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def bank_accounts(company_id: int, as_on: Optional[date] = None) -> List[Dict[str, Any]]:
+        """Per-bank-account current balances.
+
+        Each account's balance is the Bank Book closing balance as of the
+        given date — the same generator behind ``bank_balance`` — so the
+        account balances always sum to the dashboard's bank balance.
+        """
+        as_on = as_on or date.today()
+        accounts: List[Dict[str, Any]] = []
+        for account in DashboardService._active_accounts_in_group(company_id, 'Bank Accounts'):
+            report = cash_book_service.generate_bank_book(
+                company_id, date(1900, 1, 1), as_on, account_id=account['id'])
+            if not report.get('success'):
+                continue
+            closing = report.get('closing_balance', {})
+            amount = float(closing.get('amount', 0.0) or 0.0)
+            signed = -amount if closing.get('type') == 'Credit' else amount
+            accounts.append({
+                'account_id': account['id'],
+                'account_name': account['name'],
+                'account_code': account['code'],
+                'balance': signed,
+            })
+        return accounts
+
+    @staticmethod
+    def _party_outstanding(company_id: int, outstanding_type: str,
+                           as_on: Optional[date] = None) -> List[Dict[str, Any]]:
+        """Parties with a non-zero outstanding balance (receivable/payable)."""
+        as_on = as_on or date.today()
+        report = outstanding_report_service.generate_outstanding_report(
+            company_id, outstanding_type, as_on, include_zero_balance=False)
+        if not report.get('success'):
+            return []
+        return [
+            {
+                'party_id': DashboardService._row_value(party, 'account_id'),
+                'party_name': DashboardService._row_value(party, 'account_name', ''),
+                'party_code': DashboardService._row_value(party, 'account_code', ''),
+                'outstanding': float(DashboardService._row_value(party, 'outstanding_balance', 0.0) or 0.0),
+            }
+            for party in report.get('parties', [])
+        ]
+
+    @staticmethod
+    def receivable_parties(company_id: int, as_on: Optional[date] = None) -> List[Dict[str, Any]]:
+        """Parties/customers money is owed to us by (receivables drill-down)."""
+        return DashboardService._party_outstanding(company_id, 'Receivable', as_on)
+
+    @staticmethod
+    def payable_parties(company_id: int, as_on: Optional[date] = None) -> List[Dict[str, Any]]:
+        """Parties/suppliers we owe money to (payables drill-down)."""
+        return DashboardService._party_outstanding(company_id, 'Payable', as_on)
+
+    @staticmethod
+    def _month_book_movements(company_id: int, day: Optional[date] = None) -> List[Dict[str, Any]]:
+        """Cash + bank detail lines for the current month with the
+        counterparty account (the party on the other side of the voucher).
+
+        Receipt/Payment classification mirrors the Cash/Bank Book logic:
+        a book line with debit > credit is a Receipt, credit > debit is a
+        Payment, so the line amounts always reconcile to ``month_totals``.
+        """
+        day = day or date.today()
+        first = date(day.year, day.month, 1)
+        placeholders = ','.join('?' * len(DashboardService._BOOK_GROUPS))
+        rows = db.fetch_all(
+            f"""
+            SELECT
+                v.id AS voucher_id,
+                v.voucher_number,
+                v.voucher_type,
+                v.voucher_date,
+                v.reference_number,
+                v.narration,
+                vd.id AS detail_id,
+                vd.debit_amount,
+                vd.credit_amount,
+                a.name AS book_account,
+                (SELECT GROUP_CONCAT(COALESCE(ca.name, ''))
+                   FROM voucher_details od
+                   LEFT JOIN accounts ca ON ca.id = od.account_id
+                   WHERE od.voucher_id = v.id
+                     AND od.id != vd.id
+                     AND (od.debit_amount > 0 OR od.credit_amount > 0))
+                  AS counterparties
+            FROM voucher_details vd
+            JOIN vouchers v ON v.id = vd.voucher_id
+            LEFT JOIN accounts a ON a.id = vd.account_id
+            WHERE v.company_id = ?
+              AND v.status != ?
+              AND LOWER(a.account_group) IN ({placeholders})
+              AND a.is_active = 1
+              AND v.voucher_date >= ?
+              AND v.voucher_date <= ?
+            ORDER BY v.voucher_date, v.id, vd.id
+            """,
+            tuple([company_id, STATUS_CANCELLED])
+            + tuple(g.lower() for g in DashboardService._BOOK_GROUPS)
+            + (first.isoformat(), day.isoformat()),
+        )
+
+        movements: List[Dict[str, Any]] = []
+        for row in rows:
+            debit = float(DashboardService._row_value(row, 'debit_amount', 0.0) or 0.0)
+            credit = float(DashboardService._row_value(row, 'credit_amount', 0.0) or 0.0)
+            party = (DashboardService._row_value(row, 'counterparties', '')
+                     or DashboardService._row_value(row, 'book_account', ''))
+            if debit > credit:
+                movements.append({
+                    'date': DashboardService._row_value(row, 'voucher_date', ''),
+                    'party': party,
+                    'voucher_number': DashboardService._row_value(row, 'voucher_number', ''),
+                    'voucher_type': DashboardService._row_value(row, 'voucher_type', ''),
+                    'amount': debit,
+                    'kind': 'Receipt',
+                })
+            elif credit > debit:
+                movements.append({
+                    'date': DashboardService._row_value(row, 'voucher_date', ''),
+                    'party': party,
+                    'voucher_number': DashboardService._row_value(row, 'voucher_number', ''),
+                    'voucher_type': DashboardService._row_value(row, 'voucher_type', ''),
+                    'amount': credit,
+                    'kind': 'Payment',
+                })
+        return movements
+
+    @staticmethod
+    def month_receipts(company_id: int, day: Optional[date] = None) -> List[Dict[str, Any]]:
+        """All current-month receipts (money into cash/bank) up to ``day``."""
+        return [m for m in DashboardService._month_book_movements(company_id, day)
+                if m['kind'] == 'Receipt']
+
+    @staticmethod
+    def month_payments(company_id: int, day: Optional[date] = None) -> List[Dict[str, Any]]:
+        """All current-month payments (money out of cash/bank) up to ``day``."""
+        return [m for m in DashboardService._month_book_movements(company_id, day)
+                if m['kind'] == 'Payment']
+
     @staticmethod
     def recent_vouchers(company_id: int, limit: int = 8) -> List[Dict[str, Any]]:
         """Most recent non-cancelled vouchers."""
@@ -120,9 +283,14 @@ class DashboardService:
         return vouchers[:limit]
 
     @staticmethod
-    def get_dashboard(company_id: int) -> Dict[str, Any]:
-        """Full dashboard dataset for a company."""
-        today = date.today()
+    def get_dashboard(company_id: int, as_on: Optional[date] = None) -> Dict[str, Any]:
+        """Full dashboard dataset for a company.
+
+        ``as_on`` controls the reference date for every metric (defaults to
+        today): balances/receivables/payables are as-of that date and the
+        day/month totals are computed for the day/month containing it.
+        """
+        today = as_on or date.today()
         day_totals = DashboardService.today_totals(company_id, today)
         month_totals = DashboardService.month_totals(company_id, today)
         return {

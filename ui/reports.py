@@ -27,6 +27,7 @@ from ui.outstanding_report import show_outstanding_report
 from ui.ageing_report import show_ageing_report
 from ui.trial_balance_report import show_trial_balance_report
 from ui.balance_sheet_report import show_balance_sheet_report
+from ui.profit_loss_report import show_profit_loss_report
 
 
 class ReportsHubUI(ctk.CTkFrame):
@@ -103,6 +104,13 @@ class ReportsHubUI(ctk.CTkFrame):
             "icon": "▦",
             "open": lambda self: self._open_report(show_balance_sheet_report, "Balance Sheet"),
             "actions": ["Open", "Modify Filters", "Refresh", "Export", "Print"],
+        },
+        {
+            "title": "Profit & Loss",
+            "subtitle": "Income vs Expense, Net Profit/Loss",
+            "icon": "▣",
+            "open": lambda self: self._open_report(show_profit_loss_report, "Profit & Loss"),
+            "actions": ["Open", "Modify Filters", "Refresh", "Export"],
         },
     ]
 
@@ -1027,6 +1035,51 @@ class ReportsHubUI(ctk.CTkFrame):
                             return
         except Exception:
             pass
+
+    # ------------------------------------------------------------------ #
+    # global date control (Alt+F2 / F2)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _set_report_date(ui, attr: str, day) -> None:
+        if hasattr(ui, attr) and hasattr(getattr(ui, attr), "set"):
+            try:
+                getattr(ui, attr).set(day.strftime(config.DISPLAY_DATE_FORMAT))
+            except Exception:
+                pass
+
+    def on_global_date_period(self, from_date, to_date) -> None:
+        """Forward the global period to the open report, then regenerate."""
+        ui = self.current_report_ui
+        if ui is None:
+            return
+        self._set_report_date(ui, "from_date_var", from_date)
+        self._set_report_date(ui, "to_date_var", to_date)
+        # As-on reports (outstanding/ageing/balance sheet/trial balance) use
+        # the period's end date as their single As-On date.
+        if hasattr(ui, "as_on_date_var") and not hasattr(ui, "from_date_var"):
+            self._set_report_date(ui, "as_on_date_var", to_date)
+        generate = getattr(ui, "_generate_report", None)
+        if callable(generate):
+            try:
+                generate()
+            except Exception:
+                pass
+
+    def on_global_single_date(self, day) -> None:
+        """Forward the global single date to the open report, then regenerate."""
+        ui = self.current_report_ui
+        if ui is None:
+            return
+        self._set_report_date(ui, "from_date_var", day)
+        self._set_report_date(ui, "to_date_var", day)
+        if hasattr(ui, "as_on_date_var"):
+            self._set_report_date(ui, "as_on_date_var", day)
+        generate = getattr(ui, "_generate_report", None)
+        if callable(generate):
+            try:
+                generate()
+            except Exception:
+                pass
 
 
 def show_reports(parent: tk.Widget, company_id: int) -> ReportsHubUI:

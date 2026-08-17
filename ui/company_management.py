@@ -30,12 +30,15 @@ changes.
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from datetime import date
+from pathlib import Path
+from tkinter import filedialog, ttk
 from typing import Any, Callable, Dict, List, Optional
 
 import customtkinter as ctk
 
 import config
+from services.company_backup_service import BackupError, CompanyBackupService
 from services.company_service import CompanyService, CompanyServiceError
 from utils import dialogs
 
@@ -536,7 +539,19 @@ class _CompanyListState:
             actions, text="Refresh", width=90, height=32,
             corner_radius=config.BUTTON_CORNER_RADIUS, command=self.owner.refresh_companies,
         )
-        self.btn_refresh.pack(side="left")
+        self.btn_refresh.pack(side="left", padx=(config.SPACING_SM, 0))
+        self.btn_export_backup = ctk.CTkButton(
+            actions, text="Export Backup", width=120, height=32,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            fg_color="transparent", border_width=1, command=self.owner._export_backup,
+        )
+        self.btn_export_backup.pack(side="left", padx=(config.SPACING_SM, 0))
+        self.btn_import_backup = ctk.CTkButton(
+            actions, text="Import Backup", width=120, height=32,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            fg_color="transparent", border_width=1, command=self.owner._import_backup,
+        )
+        self.btn_import_backup.pack(side="left")
 
         # Search sits directly in the header toolbar, visible.
         search_box = ctk.CTkFrame(header, fg_color="transparent")
@@ -882,6 +897,119 @@ class CompanyManagementUI:
             return
         self.list.selected_id = None
         self.list.set_status(f"Company '{company.company_name}' deleted")
+        self.refresh_companies()
+
+    # ------------------------------------------------------------------ #
+    # offline backup / restore
+    # ------------------------------------------------------------------ #
+    def _backup_service(self) -> CompanyBackupService:
+        from database.database import db
+        return CompanyBackupService(db)
+
+    def _export_backup(self) -> None:
+        company_id = self._selected_id()
+        if company_id < 0:
+            dialogs.warn("Export Backup", "Select a company to back up.", parent=self.parent)
+            return
+        company = self.service.get_company(company_id)
+        if not company:
+            return
+        default_name = "Expenzo_Backup_{}_{}.expbackup".format(
+            company.company_name.strip().replace(" ", "_"),
+            date.today().strftime("%Y-%m-%d"),
+        )
+        path = filedialog.asksaveasfilename(
+            parent=self.parent,
+            title="Export Company Backup",
+            initialfile=default_name,
+            defaultextension=".expbackup",
+            filetypes=[("Expenzo Backup", "*.expbackup"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            created = self._backup_service().export_company(company_id, Path(path).parent)
+        except BackupError as exc:
+            dialogs.error("Export Backup", exc.message, parent=self.parent)
+            return
+        except Exception as exc:
+            dialogs.error("Export Backup", f"Backup failed: {exc}", parent=self.parent)
+            return
+        self.list.set_status(
+            f"✓ Backup exported for '{company.company_name}': {created.name}")
+        dialogs.info(
+            "Export Backup",
+            f"Backup created successfully.\n\n{created}\n\n"
+            "This file can be copied to any computer (USB / HDD) and imported "
+            "into Expenzo.",
+            parent=self.parent,
+        )
+
+    def _import_backup(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self.parent,
+            title="Import Expenzo Backup",
+            filetypes=[("Expenzo Backup", "*.expbackup"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        service = self._backup_service()
+        try:
+            archive = service.validate_backup_file(path)
+        except BackupError as exc:
+            dialogs.error("Import Backup", exc.message, parent=self.parent)
+            return
+        backup_name = str(archive.get("company_name", "Company"))
+
+        # If a company with this name already exists, offer explicit choice.
+        exists = self.service.list_companies(backup_name)
+        if exists:
+            replace_id = exists[0]["id"]
+            choice = dialogs.confirm(
+                "Import Backup",
+                f"Company \"{backup_name}\" already exists.\n\n"
+                "Choose OK to import as a NEW company (name gets a (2) suffix).\n"
+                "Choose NO to Replace the existing company.",
+                parent=self.parent,
+            )
+            if choice:
+                mode, target = "new", None
+            else:
+                if not dialogs.confirm(
+                    "Replace Company",
+                    f"Are you sure you want to REPLACE the existing company "
+                    f"\"{backup_name}\"?\n\n"
+                    "All of its current data will be deleted and replaced by "
+                    "the backup. This cannot be undone.",
+                    parent=self.parent,
+                ):
+                    return
+                mode, target = "replace", replace_id
+        else:
+            mode, target = "new", None
+
+        try:
+            result = service.import_backup(path, mode=mode, replace_company_id=target)
+        except BackupError as exc:
+            dialogs.error("Import Backup", exc.message, parent=self.parent)
+            return
+        except Exception as exc:
+            dialogs.error("Import Backup", f"Import failed: {exc}", parent=self.parent)
+            return
+
+        counts = result["counts"]
+        summary = (
+            f"Company \"{result['company_name']}\" restored successfully.\n\n"
+            f"  Groups:          {counts.get('groups', 0)}\n"
+            f"  Ledgers:         {counts.get('accounts', 0)}\n"
+            f"  Bank Accounts:   {counts.get('bank_accounts', 0)}\n"
+            f"  Vouchers:        {counts.get('vouchers', 0)}\n"
+            f"  Voucher Lines:   {counts.get('voucher_details', 0)}\n"
+            f"  Financial Years: {counts.get('financial_years', 0)}\n"
+        )
+        self.list.set_status(
+            f"✓ Backup imported: '{result['company_name']}'")
+        dialogs.info("Import Backup", summary, parent=self.parent)
         self.refresh_companies()
 
     def _clear_form(self) -> None:
