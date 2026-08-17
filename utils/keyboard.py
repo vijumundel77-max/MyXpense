@@ -183,13 +183,18 @@ def install_shortcuts(root: tk.Misc, get_view: Callable[[], Any]) -> None:
         return "break"
 
     def _on_f2(_event=None) -> str:
-        # F2: Global single-date selection.
-        _open_global_date_dialog(root, get_view, period=False)
+        # F2: Global single-date selection.  Opens the dialog already in
+        # date-edit mode (calendar visible, date entry focused) so the user
+        # never needs to click.
+        _open_global_date_dialog(root, get_view, period=False,
+                                 focus_date_entry=True)
         return "break"
 
     def _on_alt_f2(_event=None) -> str:
-        # Alt+F2: Global date-period selection.
-        _open_global_date_dialog(root, get_view, period=True)
+        # Alt+F2: Global date-period selection.  Opens the dialog already
+        # in date-edit mode with the From Date entry focused.
+        _open_global_date_dialog(root, get_view, period=True,
+                                 focus_date_entry=True)
         return "break"
 
     def _on_delete(_event=None) -> str:
@@ -263,13 +268,18 @@ def install_popup_escape(popup: tk.Toplevel) -> None:
 
 
 def _open_global_date_dialog(root: tk.Misc, get_view: Callable[[], Any],
-                             period: bool) -> None:
+                             period: bool,
+                             focus_date_entry: bool = False) -> None:
     """Open the global date dialog (F2 single / Alt+F2 period) modal.
 
     Truly modal: the dialog grabs all input so the underlying screen is
     blocked until Enter (Apply) or Esc (Cancel).  On Apply, the chosen
     date/period is dispatched to the active view via the shared
     ``date_control`` service.
+
+    ``focus_date_entry`` (set by the F2/Alt+F2 shortcut handlers) opens the
+    dialog with its calendar already up and the date entry focused, so the
+    user types a date directly instead of clicking.
     """
     try:
         from services.date_control_service import date_control
@@ -292,9 +302,11 @@ def _open_global_date_dialog(root: tk.Misc, get_view: Callable[[], Any],
                 pass
 
         if period:
-            show_date_period_dialog(root, _on_apply)
+            show_date_period_dialog(root, _on_apply,
+                                    focus_date_entry=focus_date_entry)
         else:
-            show_date_dialog(root, _on_apply)
+            show_date_dialog(root, _on_apply,
+                             focus_date_entry=focus_date_entry)
     except Exception:
         # Never let a shortcut hiccup break the app.
         pass

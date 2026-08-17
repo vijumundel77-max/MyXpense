@@ -21,7 +21,7 @@ from services.recent_reports_service import recent_reports, record_report_open
 from ui.day_book_report import show_day_book_report
 from ui.cash_book_report import show_cash_book_report
 from ui.bank_book_report import show_bank_book_report
-from ui.party_ledger_report import show_party_ledger_report
+from ui.ledger_report import show_ledger_report
 from ui.account_book_report import show_account_book_report
 from ui.outstanding_report import show_outstanding_report
 from ui.ageing_report import show_ageing_report
@@ -64,10 +64,10 @@ class ReportsHubUI(ctk.CTkFrame):
             "actions": ["Open", "Modify Filters", "Refresh", "Export", "Print"],
         },
         {
-            "title": "Party Ledger",
-            "subtitle": "Ledger accounts of parties",
+            "title": "Ledger",
+            "subtitle": "Account ledger statement",
             "icon": "▥",
-            "open": lambda self: self._open_report(show_party_ledger_report, "Party Ledger"),
+            "open": lambda self: self._open_report(show_ledger_report, "Ledger"),
             "actions": ["Open", "Modify Filters", "Refresh", "Export", "Print"],
         },
         {

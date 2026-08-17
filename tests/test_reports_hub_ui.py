@@ -30,7 +30,7 @@ from ui.reports import ReportsHubUI  # noqa: E402
 from utils import theme  # noqa: E402
 
 REPORT_TITLES = [
-    "Day Book", "Cash Book", "Bank Book", "Party Ledger", "Account Book",
+    "Day Book", "Cash Book", "Bank Book", "Ledger", "Account Book",
     "Outstanding Report", "Ageing Report", "Trial Balance", "Balance Sheet",
     "Profit & Loss",
 ]
@@ -285,7 +285,7 @@ class ReportsHubTest(unittest.TestCase):
             "Day Book": "DayBookReportUI",
             "Cash Book": "CashBookReportUI",
             "Bank Book": "BankBookReportUI",
-            "Party Ledger": "PartyLedgerReportUI",
+            "Ledger": "LedgerReportUI",
             "Account Book": "AccountBookReportUI",
             "Outstanding Report": "OutstandingReportUI",
             "Ageing Report": "AgeingReportUI",
@@ -304,7 +304,7 @@ class ReportsHubTest(unittest.TestCase):
             self.assertIsNone(self.hub.current_frame)
 
     def test_company_id_passed_to_report(self):
-        self.hub._on_card_enter("Party Ledger")
+        self.hub._on_card_enter("Ledger")
         self._sync()
         self.assertEqual(self.hub.current_report_ui.company_id, 1)
         self.hub._close_report()
@@ -389,14 +389,14 @@ class ReportsHubTest(unittest.TestCase):
         for attr in ("from_date_var", "to_date_var", "account_var", "search_var"):
             self.assertTrue(hasattr(ui, attr), f"Bank Book missing {attr}")
 
-    def test_party_ledger_has_party_date_controls(self):
-        self.hub._on_card_click("Party Ledger")
+    def test_ledger_has_period_date_controls(self):
+        self.hub._on_card_click("Ledger")
         self.hub._on_global_enter()
         self._sync()
         ui = self.hub.current_report_ui
-        for attr in ("party_var", "from_date_var", "to_date_var", "search_var",
-                     "party_combo"):
-            self.assertTrue(hasattr(ui, attr), f"Party Ledger missing {attr}")
+        for attr in ("from_date_var", "to_date_var", "search_var",
+                     "search_entry"):
+            self.assertTrue(hasattr(ui, attr), f"Ledger missing {attr}")
 
     def test_trial_balance_has_as_of_date_and_search(self):
         self.hub._on_card_click("Trial Balance")
@@ -812,7 +812,7 @@ class ReportsHubTest(unittest.TestCase):
     def test_report_filters_do_not_stack_everything(self):
         """Report filters stay in a compact grid (<=3 rows), never one field
         per line stacked vertically."""
-        for title in ("Outstanding Report", "Ageing Report", "Party Ledger",
+        for title in ("Outstanding Report", "Ageing Report", "Ledger",
                       "Trial Balance", "Balance Sheet", "Day Book", "Cash Book",
                       "Bank Book", "Account Book"):
             ui = self._open_report_ui(title)

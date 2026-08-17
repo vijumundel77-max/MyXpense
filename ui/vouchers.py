@@ -27,9 +27,10 @@ of ``voucher_details`` rows saved through ``voucher_service.save_voucher`` /
 Debit / Credit columns map 1:1 to ``debit_amount`` / ``credit_amount``.
 
 Keyboard workflow (uses the existing global shortcut architecture in
-``utils.keyboard``): Ctrl+N new, Ctrl+S / Ctrl+A save, Ctrl+F search, F5
-refresh, F4-F9 voucher-type switch, Esc back, Enter/Tab to move through the
-grid, arrows to navigate rows.
+``utils.keyboard``): Ctrl+N new, Ctrl+S / Ctrl+A save (Accept), Ctrl+F
+search, F5 refresh, F4-F9 voucher-type switch, Esc back.  Inside the grid,
+Tab / Enter move Particulars -> Debit -> Credit -> next row -> Narration ->
+Save, and arrows navigate the ledger picker results.
 """
 from __future__ import annotations
 
@@ -72,8 +73,10 @@ _GRID_HEADINGS = ["Particulars", "Debit", "Credit"]
 _ROW_HEIGHT = 40
 _HEADER_ROW_HEIGHT = 30
 
-# Fixed width of the Debit/Credit amount cells so headers and rows align.
+# Fixed widths of the grid columns so the header row and the entry rows
+# share exactly the same geometry (headings sit directly over the fields).
 _AMOUNT_COL_WIDTH = 150
+_PARTICULARS_COL_WIDTH = 320
 
 # Voucher-type selector labels (F4..F9).
 VOUCHER_TYPE_LABELS = {
@@ -116,6 +119,10 @@ class VouchersFrame(ctk.CTkFrame):
         self._register_open = False
         self.register_window: Optional[ctk.CTkToplevel] = None
         self.register_tree = None
+        # Reentrancy guard: Ctrl+A, the Save button and Enter-on-final-credit
+        # all route through the same save path, so a second invocation while
+        # a save is already in flight must not run again (no duplicate save).
+        self._saving = False
 
         # A short keep-alive hook so the test suite (and tools) can wait for
         # pending popup-hide callbacks without flapping.
@@ -134,8 +141,9 @@ class VouchersFrame(ctk.CTkFrame):
         self._build_status()
 
         wire_entry_screen(self, self.main_frame, [
-            ("Ctrl+S", "Save"), ("Ctrl+N", "New"), ("Ctrl+F", "Search"),
-            ("F5", "Refresh"), ("Del", "Cancel selected"), ("Esc", "Back"),
+            ("Ctrl+S", "Save"), ("Ctrl+A", "Accept"), ("Ctrl+N", "New"),
+            ("Ctrl+F", "Search"), ("F5", "Refresh"), ("F4-F9", "Type"),
+            ("Del", "Cancel selected"), ("Esc", "Back"),
         ])
         # Esc: close the Voucher Register first, then return to the previous
         # screen (wire_entry_screen's default only navigates back).
@@ -230,7 +238,9 @@ class VouchersFrame(ctk.CTkFrame):
             border_width=1, border_color=config.COLOR_CARD_BORDER,
         )
         bar.pack(fill="x", pady=(0, config.SPACING_LG))
-        bar.grid_columnconfigure(3, weight=1)
+        # Column 2 (Voucher No.) flexes so the Party field hugs the right
+        # edge of the bar instead of being squeezed by the type selector.
+        bar.grid_columnconfigure(2, weight=1)
 
         self.type_var = tk.StringVar(value=VOUCHER_PAYMENT)
         self.date_var = tk.StringVar(value=self._default_voucher_date())
@@ -242,13 +252,13 @@ class VouchersFrame(ctk.CTkFrame):
 
         self.party_picker: Optional[LedgerPicker] = None
         party_holder = ctk.CTkFrame(bar, fg_color="transparent")
-        party_holder.grid(row=0, column=4, sticky="w", padx=(0, config.SPACING_LG))
+        party_holder.grid(row=0, column=3, sticky="e", padx=(config.SPACING_LG, config.SPACING_LG))
         ctk.CTkLabel(
             party_holder, text="Party A/C Name", font=ctk.CTkFont(size=12),
             text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
         ).pack(anchor="w")
         self.party_picker = LedgerPicker(
-            party_holder, self.company_id, width=240,
+            party_holder, self.company_id, width=180,
             groups=PARTY_GROUPS, on_selected=lambda _id: self._on_party_selected(),
             on_add_new=self._add_ledger_modal,
         )
@@ -260,7 +270,7 @@ class VouchersFrame(ctk.CTkFrame):
             bar, text="", font=ctk.CTkFont(size=11),
             text_color=config.COLOR_TEXT_MUTED, anchor="w",
         )
-        self.flow_hint.grid(row=1, column=4, sticky="w", padx=(0, config.SPACING_LG),
+        self.flow_hint.grid(row=1, column=3, sticky="e", padx=(0, config.SPACING_LG),
                             pady=(2, config.SPACING_SM))
 
     def _bar_field(self, parent, column: int, label: str, builder) -> None:
@@ -274,17 +284,20 @@ class VouchersFrame(ctk.CTkFrame):
         widget.pack(anchor="w", pady=(2, config.SPACING_SM))
 
     def _build_type_combo(self, holder) -> ctk.CTkWidget:
-        # The 6-voucher type selector as a segmented button.  ``type_combo``
-        # is kept as an alias (tests + code reference it) but the widget is a
-        # CTkSegmentedButton.  The segment labels are "Contra (F4)" etc.; the
+        # The 6-voucher type selector as a compact read-only dropdown.
+        # ``type_combo`` keeps its name (tests + code reference it); the
         # command maps the selected label back to the raw voucher type so
         # ``type_var`` always holds "Payment", "Sales", ...
-        self.type_combo = ctk.CTkSegmentedButton(
-            holder,
-            values=[VOUCHER_TYPE_LABELS[t] for t in VOUCHER_TYPES],
-            variable=tk.StringVar(value=VOUCHER_TYPE_LABELS[VOUCHER_PAYMENT]),
+        labels = [VOUCHER_TYPE_LABELS[t] for t in VOUCHER_TYPES]
+        self.type_combo = ctk.CTkComboBox(
+            holder, values=labels, width=160, height=32,
+            corner_radius=config.INPUT_CORNER_RADIUS,
+            font=ctk.CTkFont(size=config.FONT_BODY_SIZE),
+            dropdown_font=ctk.CTkFont(size=config.FONT_BODY_SIZE),
             command=self._on_segmented_type,
+            state="readonly",
         )
+        self.type_combo.set(labels[0])
         self.type_var.set(VOUCHER_PAYMENT)
         return self.type_combo
 
@@ -300,7 +313,7 @@ class VouchersFrame(ctk.CTkFrame):
         from ui.report_base import make_date_picker
         widget = make_date_picker(holder, self.date_var)
         self.date_entry = widget.search_entry
-        self.date_entry.configure(width=140)
+        self.date_entry.configure(width=110)
         self.date_entry.bind("<Return>", lambda _e: self._focus_next_field())
         return widget
 
@@ -317,7 +330,7 @@ class VouchersFrame(ctk.CTkFrame):
         self._update_balance()
 
     # ------------------------------------------------------------------ #
-    # layout — accounting entry grid (scrolls; header row stays visible)
+    # layout — accounting entry grid (scrolls; header shares row geometry)
     # ------------------------------------------------------------------ #
     def _build_entry_area(self) -> None:
         area = ctk.CTkFrame(
@@ -326,42 +339,50 @@ class VouchersFrame(ctk.CTkFrame):
             border_width=1, border_color=config.COLOR_CARD_BORDER,
         )
         area.pack(fill="both", expand=True, pady=(0, config.SPACING_LG))
-        area.grid_rowconfigure(1, weight=1)
+        area.grid_rowconfigure(0, weight=1)
         area.grid_columnconfigure(0, weight=1)
 
-        # Column headers (fixed).
-        headers = ctk.CTkFrame(area, fg_color="transparent", height=_HEADER_ROW_HEIGHT)
-        headers.grid(row=0, column=0, sticky="ew")
-        headers.grid_propagate(False)
-        headers.grid_columnconfigure(0, weight=1)
-        headers.grid_columnconfigure(1, weight=0, minsize=_AMOUNT_COL_WIDTH + config.SPACING_SM)
-        headers.grid_columnconfigure(2, weight=0, minsize=_AMOUNT_COL_WIDTH + config.SPACING_SM)
-
-        ctk.CTkLabel(
-            headers, text="Particulars", font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=config.SPACING_LG, pady=4)
-        ctk.CTkLabel(
-            headers, text="Debit", font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLOR_EXPENSE, anchor="e",
-        ).grid(row=0, column=1, sticky="e", padx=(0, config.SPACING_MD), pady=4)
-        ctk.CTkLabel(
-            headers, text="Credit", font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLOR_INCOME, anchor="e",
-        ).grid(row=0, column=2, sticky="e", padx=(0, config.SPACING_XL), pady=4)
-
-        # Scrollable grid body.
+        # Scrollable grid body.  The column header row lives INSIDE the
+        # scrollable content so it shares the exact same horizontal geometry
+        # as the entry rows — the headings sit pixel-perfect over the fields
+        # (they scroll together, which is the standard Tally grid look).
         body = ctk.CTkScrollableFrame(
             area, fg_color="transparent", corner_radius=0,
             scrollbar_button_color=config.COLOR_BG_TERTIARY,
             scrollbar_button_hover_color=config.COLOR_PRIMARY_HOVER,
         )
-        body.grid(row=1, column=0, sticky="nsew")
+        body.grid(row=0, column=0, sticky="nsew")
         self.grid_body = body
-        # The frame itself holds the scrollable rows; we manage them via pack.
+        # The frame holds the header row + scrollable rows; managed via pack.
         self.grid_rows_frame = ctk.CTkFrame(body, fg_color="transparent")
         self.grid_rows_frame.pack(fill="x")
-        self.grid_rows_frame.grid_columnconfigure(0, weight=1)
+        self.grid_rows_frame.grid_columnconfigure(0, weight=1, minsize=_PARTICULARS_COL_WIDTH)
+        self.grid_rows_frame.grid_columnconfigure(1, weight=0, minsize=_AMOUNT_COL_WIDTH)
+        self.grid_rows_frame.grid_columnconfigure(2, weight=0, minsize=_AMOUNT_COL_WIDTH)
+
+        # Column headers (fixed height).  Column 0 (Particulars) is flexible
+        # and columns 1/2 are fixed-width — identical to every entry row.
+        headers = ctk.CTkFrame(self.grid_rows_frame, fg_color="transparent",
+                               height=_HEADER_ROW_HEIGHT)
+        headers.pack(fill="x")
+        headers.grid_propagate(False)
+        headers.grid_columnconfigure(0, weight=1, minsize=_PARTICULARS_COL_WIDTH)
+        headers.grid_columnconfigure(1, weight=0, minsize=_AMOUNT_COL_WIDTH)
+        headers.grid_columnconfigure(2, weight=0, minsize=_AMOUNT_COL_WIDTH)
+
+        ctk.CTkLabel(
+            headers, text="Particulars", font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLOR_TEXT_SECONDARY, anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=(config.SPACING_LG, 0), pady=4)
+        ctk.CTkLabel(
+            headers, text="Debit", font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLOR_EXPENSE, anchor="e",
+        ).grid(row=0, column=1, sticky="e", padx=0, pady=4)
+        ctk.CTkLabel(
+            headers, text="Credit", font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=config.COLOR_INCOME, anchor="e",
+        ).grid(row=0, column=2, sticky="e", padx=0, pady=4)
+        self.grid_headers = headers
 
         self._first_focus: Optional[Any] = None
 
@@ -372,26 +393,40 @@ class VouchersFrame(ctk.CTkFrame):
         frame = ctk.CTkFrame(self.grid_rows_frame, fg_color="transparent", height=_ROW_HEIGHT)
         frame.pack(fill="x")
         frame.grid_propagate(False)
-        frame.grid_columnconfigure(0, weight=1)
-        frame.grid_columnconfigure(1, weight=0, minsize=_AMOUNT_COL_WIDTH + config.SPACING_SM)
-        frame.grid_columnconfigure(2, weight=0, minsize=_AMOUNT_COL_WIDTH + config.SPACING_SM)
+        frame.grid_columnconfigure(0, weight=1, minsize=_PARTICULARS_COL_WIDTH)
+        frame.grid_columnconfigure(1, weight=0, minsize=_AMOUNT_COL_WIDTH)
+        frame.grid_columnconfigure(2, weight=0, minsize=_AMOUNT_COL_WIDTH)
         row["frame"] = frame
 
-        # Particulars: a "To " prefix for credit-side lines, then the picker.
+        # Particulars: a proper field container (bordered card) holding the
+        # "To " prefix for credit-side lines and the ledger picker.  It spans
+        # the whole Particulars column so the field aligns with its heading.
+        particulars = ctk.CTkFrame(
+            frame, fg_color=config.COLOR_BG_SECONDARY,
+            corner_radius=config.INPUT_CORNER_RADIUS,
+            border_width=1, border_color=config.COLOR_CARD_BORDER,
+        )
+        particulars.grid(row=0, column=0, sticky="ew",
+                         padx=(config.SPACING_LG, config.SPACING_SM), pady=6)
+        particulars.grid_columnconfigure(0, weight=0)
+        particulars.grid_columnconfigure(1, weight=1)
+        row["particulars_frame"] = particulars
+
+        # "To " prefix for credit-side lines.
         label = ctk.CTkLabel(
-            frame, text="To ", font=ctk.CTkFont(size=config.FONT_BODY_SIZE, weight="bold"),
+            particulars, text="To ", font=ctk.CTkFont(size=config.FONT_BODY_SIZE, weight="bold"),
             text_color=config.COLOR_TEXT_SECONDARY,
         )
-        label.grid(row=0, column=0, sticky="w", padx=(config.SPACING_MD, 0), pady=6)
+        label.grid(row=0, column=0, sticky="w", padx=(config.SPACING_SM, 0))
         row["to_label"] = label
 
         picker = LedgerPicker(
-            frame, self.company_id, width=0,
+            particulars, self.company_id, width=0,
             on_selected=lambda _id, r=row: self._on_row_selected(r),
             on_add_new=self._add_ledger_modal,
+            on_tab=lambda r=row: self._focus_after_particulars(r),
         )
-        picker.grid(row=0, column=0, sticky="ew", padx=(config.SPACING_LG, config.SPACING_SM),
-                    pady=6)
+        picker.grid(row=0, column=1, sticky="ew", padx=(0, config.SPACING_XS), pady=2)
         row["picker"] = picker
 
         # Debit / Credit amount cells (right-aligned).
@@ -401,17 +436,17 @@ class VouchersFrame(ctk.CTkFrame):
         credit_var.trace_add("write", lambda *_: self._update_balance())
 
         debit_entry = ctk.CTkEntry(
-            frame, textvariable=debit_var, width=_AMOUNT_COL_WIDTH, justify="right",
+            frame, textvariable=debit_var, width=0, justify="right",
             corner_radius=config.INPUT_CORNER_RADIUS,
             font=ctk.CTkFont(size=config.FONT_BODY_SIZE),
         )
-        debit_entry.grid(row=0, column=1, sticky="e", padx=(0, config.SPACING_SM), pady=6)
+        debit_entry.grid(row=0, column=1, sticky="ew", padx=0, pady=6)
         credit_entry = ctk.CTkEntry(
-            frame, textvariable=credit_var, width=_AMOUNT_COL_WIDTH, justify="right",
+            frame, textvariable=credit_var, width=0, justify="right",
             corner_radius=config.INPUT_CORNER_RADIUS,
             font=ctk.CTkFont(size=config.FONT_BODY_SIZE),
         )
-        credit_entry.grid(row=0, column=2, sticky="e", padx=(0, config.SPACING_XL), pady=6)
+        credit_entry.grid(row=0, column=2, sticky="ew", padx=0, pady=6)
 
         row["debit_var"] = debit_var
         row["credit_var"] = credit_var
@@ -420,6 +455,10 @@ class VouchersFrame(ctk.CTkFrame):
 
         debit_entry.bind("<Return>", lambda _e, r=row: self._on_amount_return(r, "debit"))
         credit_entry.bind("<Return>", lambda _e, r=row: self._on_amount_return(r, "credit"))
+        debit_entry.bind("<Tab>", lambda _e, r=row: self._on_amount_tab(r, "debit"))
+        credit_entry.bind("<Tab>", lambda _e, r=row: self._on_amount_tab(r, "credit"))
+        debit_entry.bind("<Shift-Tab>", lambda _e, r=row: self._on_amount_shift_tab(r, "debit"))
+        credit_entry.bind("<Shift-Tab>", lambda _e, r=row: self._on_amount_shift_tab(r, "credit"))
         credit_entry.bind("<KeyRelease>", lambda _e, r=row: self._maybe_add_row(r))
         debit_entry.bind("<KeyRelease>", lambda _e, r=row: self._maybe_add_row(r))
 
@@ -455,6 +494,46 @@ class VouchersFrame(ctk.CTkFrame):
         credit_row = self._ensure_credit_row()
         credit_row["picker"].focus_entry()
 
+    def _on_amount_tab(self, row: Dict[str, Any], side: str) -> None:
+        """Tab from an amount cell: Debit -> Credit -> next row -> Narration."""
+        if side == "debit":
+            credit_row = self._ensure_credit_row()
+            credit_row["credit_entry"].focus_set()
+            return "break"
+        self._focus_after_credit(row)
+        return "break"
+
+    def _on_amount_shift_tab(self, row: Dict[str, Any], side: str) -> None:
+        if side == "debit":
+            row["picker"].focus_entry()
+        else:
+            # Back from Credit: to the debit entry of the same row if it has
+            # one, otherwise the first debit row's debit entry.
+            debit_row = next((r for r in self.rows if not r.get("to_line")), None)
+            if debit_row is not None:
+                debit_row["debit_entry"].focus_set()
+        return "break"
+
+    def _focus_after_particulars(self, row: Dict[str, Any]) -> None:
+        """After a particulars field, focus its Debit (or Credit for "To")."""
+        if row.get("to_line"):
+            row["credit_entry"].focus_set()
+        else:
+            row["debit_entry"].focus_set()
+
+    def _focus_after_credit(self, row: Dict[str, Any]) -> None:
+        """After the credit amount: next row's particulars, else Narration."""
+        index = self.rows.index(row) if row in self.rows else -1
+        next_row = None
+        for candidate in self.rows[index + 1:]:
+            # Skip blank trailing lines; go to the next row's particulars.
+            next_row = candidate
+            break
+        if next_row is not None:
+            next_row["picker"].focus_entry()
+        else:
+            self.narration_entry.focus_set()
+
     def _on_enter_after_credit(self, row: Dict[str, Any]) -> None:
         # Finished the credit side: add a fresh debit line (continues the
         # entry flow), or save when the voucher is complete and balanced.
@@ -466,6 +545,15 @@ class VouchersFrame(ctk.CTkFrame):
         else:
             self._add_row()
             self._focus_last_row_account()
+
+    def _on_narration_return(self, _event=None) -> str:
+        self.btn_save.focus_set()
+        self.btn_save.invoke()
+        return "break"
+
+    def _on_narration_tab(self, _event=None) -> str:
+        self.btn_save.focus_set()
+        return "break"
 
     def _maybe_add_row(self, row: Dict[str, Any]) -> None:
         # When a row already carries an account + amount and the user keeps
@@ -722,6 +810,10 @@ class VouchersFrame(ctk.CTkFrame):
             font=ctk.CTkFont(size=config.FONT_BODY_SIZE),
         )
         self.narration_entry.pack(side="left", fill="x", expand=True, padx=(config.SPACING_SM, 0))
+        # Narration is the last editable field: Tab/Enter land on the Save
+        # button so the voucher can be accepted entirely from the keyboard.
+        self.narration_entry.bind("<Return>", self._on_narration_return)
+        self.narration_entry.bind("<Tab>", self._on_narration_tab)
 
     def _build_action_bar(self) -> None:
         bar = ctk.CTkFrame(
@@ -741,6 +833,9 @@ class VouchersFrame(ctk.CTkFrame):
             text_color="#FFFFFF",
         )
         self.btn_save.pack(side="left", padx=(0, config.SPACING_SM))
+        # Enter (or Space) on the focused Save button accepts the voucher.
+        self.btn_save.bind("<Return>", lambda _e: self._save_voucher() or "break")
+        self.btn_save.bind("<space>", lambda _e: self._save_voucher() or "break")
         self.btn_save_new = ctk.CTkButton(
             inner, text="Save & New", width=110, height=32,
             corner_radius=config.BUTTON_CORNER_RADIUS, command=self._save_and_new,
@@ -947,30 +1042,41 @@ class VouchersFrame(ctk.CTkFrame):
     # save / update / cancel
     # ------------------------------------------------------------------ #
     def _save_voucher(self) -> None:
-        if self.current_voucher_id is not None:
-            self._update_voucher()
+        """Accept the voucher (Ctrl+A / Ctrl+S / Save button / Enter).
+
+        Reentrancy-guarded so a key repeat or a second shortcut firing while
+        a save is already running can never write the voucher twice.
+        """
+        if self._saving:
             return
-        error = self._validate_form()
-        if error:
-            dialogs.warn("Save Voucher", error, parent=self.parent)
-            self._set_status(error)
-            return
-        voucher_date = self._parse_date(self.date_var.get())
-        entries = self._form_entries()
-        ok, message, voucher_id = voucher_service.save_voucher(
-            self.company_id,
-            self.type_var.get(),
-            voucher_date,
-            entries,
-            narration=self.narration_var.get().strip(),
-        )
-        if not ok:
-            dialogs.error("Save Voucher", message, parent=self.parent)
+        self._saving = True
+        try:
+            if self.current_voucher_id is not None:
+                self._update_voucher()
+                return
+            error = self._validate_form()
+            if error:
+                dialogs.warn("Save Voucher", error, parent=self.parent)
+                self._set_status(error)
+                return
+            voucher_date = self._parse_date(self.date_var.get())
+            entries = self._form_entries()
+            ok, message, voucher_id = voucher_service.save_voucher(
+                self.company_id,
+                self.type_var.get(),
+                voucher_date,
+                entries,
+                narration=self.narration_var.get().strip(),
+            )
+            if not ok:
+                dialogs.error("Save Voucher", message, parent=self.parent)
+                self._set_status(message)
+                return
             self._set_status(message)
-            return
-        self._set_status(message)
-        self._new_voucher()
-        self.refresh_vouchers()
+            self._new_voucher()
+            self.refresh_vouchers()
+        finally:
+            self._saving = False
 
     def _update_voucher(self) -> None:
         if self.current_voucher_id is None:

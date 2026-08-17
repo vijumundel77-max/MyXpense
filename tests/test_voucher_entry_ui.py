@@ -517,12 +517,12 @@ class VoucherEntryUITest(unittest.TestCase):
         self.assertEqual(calls, ["back"])
 
     # ------------------------------------------------------------------ #
-    # 6-voucher type selector (segmented button) + F4-F9 hotkeys
+    # 6-voucher type selector + F4-F9 hotkeys
     # ------------------------------------------------------------------ #
-    def test_segmented_selector_shows_all_six_types(self):
-        texts = "\n".join(_all_text(self.ui.main_frame))
+    def test_type_selector_shows_all_six_types(self):
+        values = list(self.ui.type_combo.cget("values"))
         for label in VOUCHER_TYPE_LABELS.values():
-            self.assertIn(label, texts)
+            self.assertIn(label, values)
 
     def test_type_var_holds_raw_voucher_type(self):
         self.assertEqual(self.ui.type_var.get(), VOUCHER_PAYMENT)

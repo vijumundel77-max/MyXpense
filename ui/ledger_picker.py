@@ -38,6 +38,7 @@ class LedgerPicker(ctk.CTkFrame):
         on_selected: Optional[Callable[[int], None]] = None,
         groups: Optional[List[str]] = None,
         on_add_new: Optional[Callable[[], None]] = None,
+        on_tab: Optional[Callable[[], None]] = None,
     ):
         super().__init__(master, fg_color="transparent")
         self.company_id = company_id
@@ -45,6 +46,7 @@ class LedgerPicker(ctk.CTkFrame):
         self.on_selected = on_selected
         self.groups = groups  # Optional list of account groups to restrict to.
         self.on_add_new = on_add_new  # Optional "+ New ledger" callback.
+        self.on_tab = on_tab  # Optional forward-tab navigation hook.
 
         self.entry_var = tk.StringVar()
         self.entry_var.trace_add("write", self._on_search)
@@ -319,15 +321,22 @@ class LedgerPicker(ctk.CTkFrame):
         return "break"
 
     def _on_tab_out(self, _event=None):
-        # Commit the highlighted account when tabbing away, then let the
-        # normal traversal move focus to the next widget.
-        if self._select_current(silent=True):
-            self._hide_popup()
+        # Commit the highlighted account when tabbing away.  When the owner
+        # wired an ``on_tab`` navigation hook, hand focus to the next field in
+        # the entry chain; otherwise let the normal traversal move on.
+        self._select_current(silent=True)
+        self._hide_popup()
+        if self.on_tab is not None:
+            try:
+                self.on_tab()
+            except Exception:
+                pass
+            return "break"
         return None
 
     def _on_shift_tab_out(self, _event=None):
-        if self._select_current(silent=True):
-            self._hide_popup()
+        self._select_current(silent=True)
+        self._hide_popup()
         return None
 
     def _select_current(self, silent: bool = False) -> bool:

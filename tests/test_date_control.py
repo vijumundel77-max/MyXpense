@@ -196,6 +196,97 @@ class TestDateControlDialogs(unittest.TestCase):
         self.assertTrue(dlg.bind('<Return>'))
         dlg._cancel()
 
+    def test_period_dialog_focus_date_entry_flag_sets_from_entry(self):
+        """Alt+F2: the From Date entry is the keyboard focus target."""
+        dlg = DatePeriodDialog(self.root, focus_date_entry=True)
+        self.root.update_idletasks()
+        self.assertEqual(dlg._date_entry, dlg.from_entry)
+        dlg._cancel()
+
+    def test_period_dialog_focus_date_entry_focuses_from_entry(self):
+        """Alt+F2: _focus_first lands keyboard focus on the From Date entry.
+
+        The test root is withdrawn, so Tk cannot report a meaningful
+        ``focus_get()`` here; asserting that ``_focus_first`` targets the
+        entry (via the base class focus hook) is the reliable check.
+        """
+        focused = []
+        dlg = DatePeriodDialog(self.root, focus_date_entry=True)
+        self.root.update_idletasks()
+        original = dlg.from_entry.focus_set
+        dlg.from_entry.focus_set = lambda: focused.append(dlg.from_entry)
+        try:
+            dlg._focus_first()
+            self.assertEqual(focused, [dlg.from_entry])
+        finally:
+            dlg.from_entry.focus_set = original
+        dlg._cancel()
+
+    def test_period_dialog_focus_date_entry_tab_moves_to_to_entry(self):
+        """Alt+F2: Tab moves keyboard focus from From Date to To Date."""
+        focused = []
+        dlg = DatePeriodDialog(self.root, focus_date_entry=True)
+        self.root.update_idletasks()
+        original = dlg.to_entry.focus_set
+        dlg.to_entry.focus_set = lambda: focused.append(dlg.to_entry)
+        try:
+            dlg._focus_to_entry()
+            self.assertEqual(focused, [dlg.to_entry])
+        finally:
+            dlg.to_entry.focus_set = original
+        dlg._cancel()
+
+    def test_period_dialog_default_focus_stays_on_dialog(self):
+        """Without the flag, existing behavior is unchanged (no entry focus)."""
+        dlg = DatePeriodDialog(self.root)
+        self.root.update_idletasks()
+        self.assertIsNone(dlg._date_entry)
+        dlg._cancel()
+
+    def test_date_dialog_focus_date_entry_sets_date_entry(self):
+        """F2: the date entry is the keyboard focus target."""
+        dlg = DateDialog(self.root, focus_date_entry=True)
+        self.root.update_idletasks()
+        self.assertEqual(dlg._date_entry, dlg.date_entry)
+        dlg._cancel()
+
+    def test_date_dialog_focus_date_entry_focuses_date_entry(self):
+        """F2: _focus_first lands keyboard focus on the date entry."""
+        focused = []
+        dlg = DateDialog(self.root, focus_date_entry=True)
+        self.root.update_idletasks()
+        original = dlg.date_entry.focus_set
+        dlg.date_entry.focus_set = lambda: focused.append(dlg.date_entry)
+        try:
+            dlg._focus_first()
+            self.assertEqual(focused, [dlg.date_entry])
+        finally:
+            dlg.date_entry.focus_set = original
+        dlg._cancel()
+
+    def test_date_dialog_default_focus_stays_on_dialog(self):
+        """Without the flag, existing behavior is unchanged (no entry focus)."""
+        dlg = DateDialog(self.root)
+        self.root.update_idletasks()
+        self.assertIsNone(dlg._date_entry)
+        dlg._cancel()
+
+    def test_factories_forward_focus_date_entry(self):
+        """show_date_dialog / show_date_period_dialog forward the flag."""
+        from ui.date_control_dialog import (
+            show_date_dialog,
+            show_date_period_dialog,
+        )
+        dlg = show_date_dialog(self.root, focus_date_entry=True)
+        self.root.update_idletasks()
+        self.assertEqual(dlg._date_entry, dlg.date_entry)
+        dlg._cancel()
+
+        dlg2 = show_date_period_dialog(self.root, focus_date_entry=True)
+        self.root.update_idletasks()
+        self.assertEqual(dlg2._date_entry, dlg2.from_entry)
+        dlg2._cancel()
+
 
 if __name__ == '__main__':
     unittest.main()

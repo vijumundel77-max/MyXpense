@@ -30,13 +30,21 @@ def _today_str() -> str:
 
 
 class _BaseDateDialog(ctk.CTkToplevel):
-    """Shared modal shell: grab, non-movable, Enter/Esc handling."""
+    """Shared modal shell: grab, non-movable, Enter/Esc handling.
 
-    def __init__(self, parent: tk.Widget, title: str):
+    ``focus_date_entry`` (True for the global F2/Alt+F2 shortcuts) puts
+    keyboard focus directly on the dialog's date entry (current value
+    selected), so the user can type a date immediately — no mouse click.
+    """
+
+    def __init__(self, parent: tk.Widget, title: str,
+                 focus_date_entry: bool = False):
         super().__init__(parent)
         self.parent = parent
         self.result: Any = None
         self._applied = False
+        self._focus_date_entry = focus_date_entry
+        self._date_entry: Optional[tk.Widget] = None
 
         self.title(title)
         self.transient(parent)
@@ -80,7 +88,21 @@ class _BaseDateDialog(ctk.CTkToplevel):
         raise NotImplementedError
 
     def _focus_first(self) -> None:
-        pass
+        # Put keyboard focus on the date entry (with its current value
+        # selected) so the user can type a date immediately — no mouse click.
+        entry = self._date_entry
+        if entry is not None and hasattr(entry, "focus_set"):
+            try:
+                entry.focus_set()
+                entry.select_range(0, "end")
+                entry.icursor("end")
+                return
+            except Exception:
+                pass
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     # -- actions ------------------------------------------------------ #
     def _apply(self) -> None:
@@ -118,7 +140,8 @@ class _BaseDateDialog(ctk.CTkToplevel):
 class DatePeriodDialog(_BaseDateDialog):
     """Alt+F2: choose a From/To date period.  Enter applies, Esc cancels."""
 
-    def __init__(self, parent: tk.Widget, on_apply: Optional[Callable[[date, date], None]] = None):
+    def __init__(self, parent: tk.Widget, on_apply: Optional[Callable[[date, date], None]] = None,
+                 focus_date_entry: bool = False):
         self.on_apply_cb = on_apply
         company_id = _resolve_company_id(parent)
         fy_start, fy_end = date_control.company_financial_year(company_id)
@@ -130,7 +153,8 @@ class DatePeriodDialog(_BaseDateDialog):
         self._min_date, self._max_date = fy_start, fy_end
         self.from_date = default_from
         self.to_date = default_to
-        super().__init__(parent, "Date Period — Alt+F2")
+        super().__init__(parent, "Date Period — Alt+F2",
+                         focus_date_entry=focus_date_entry)
 
     def _build_body(self) -> None:
         ctk.CTkLabel(
@@ -150,12 +174,23 @@ class DatePeriodDialog(_BaseDateDialog):
         ctk.CTkLabel(form, text="From Date", font=ctk.CTkFont(size=12),
                      text_color=config.COLOR_TEXT_SECONDARY).grid(
             row=0, column=0, sticky="w")
-        make_date_picker(form, self.from_var).grid(row=1, column=0, sticky="w")
+        from_widget = make_date_picker(form, self.from_var)
+        from_widget.grid(row=1, column=0, sticky="w")
+        self.from_entry = from_widget.search_entry
         ctk.CTkLabel(form, text="To Date", font=ctk.CTkFont(size=12),
                      text_color=config.COLOR_TEXT_SECONDARY).grid(
             row=0, column=1, sticky="w", padx=(config.SPACING_LG, 0))
-        make_date_picker(form, self.to_var).grid(
+        to_widget = make_date_picker(form, self.to_var)
+        to_widget.grid(
             row=1, column=1, sticky="w", padx=(config.SPACING_LG, 0))
+        self.to_entry = to_widget.search_entry
+
+        # The global Alt+F2 shortcut lands on the From Date entry; Tab moves
+        # to To Date.  The calendar button next to each entry still works.
+        if self._focus_date_entry:
+            self._date_entry = self.from_entry
+            self.from_entry.bind("<Tab>", lambda _e: self._focus_to_entry())
+            self.to_entry.bind("<Shift-Tab>", lambda _e: self._focus_from_entry())
 
         # Buttons.
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -172,9 +207,17 @@ class DatePeriodDialog(_BaseDateDialog):
                      font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_MUTED
                      ).pack(side="left", padx=(config.SPACING_MD, 0))
 
-    def _focus_first(self) -> None:
+    def _focus_from_entry(self) -> None:
         try:
-            self.focus_set()
+            self.from_entry.focus_set()
+        except Exception:
+            pass
+
+    def _focus_to_entry(self) -> None:
+        try:
+            self.to_entry.focus_set()
+            self.to_entry.select_range(0, "end")
+            self.to_entry.icursor("end")
         except Exception:
             pass
 
@@ -194,13 +237,15 @@ class DatePeriodDialog(_BaseDateDialog):
 class DateDialog(_BaseDateDialog):
     """F2: choose a single date.  Enter applies, Esc cancels."""
 
-    def __init__(self, parent: tk.Widget, on_apply: Optional[Callable[[date], None]] = None):
+    def __init__(self, parent: tk.Widget, on_apply: Optional[Callable[[date], None]] = None,
+                 focus_date_entry: bool = False):
         self.on_apply_cb = on_apply
         company_id = _resolve_company_id(parent)
         fy_start, fy_end = date_control.company_financial_year(company_id)
         self._min_date, self._max_date = fy_start, fy_end
         self.selected = date.today()
-        super().__init__(parent, "Select Date — F2")
+        super().__init__(parent, "Select Date — F2",
+                         focus_date_entry=focus_date_entry)
 
     def _build_body(self) -> None:
         ctk.CTkLabel(
@@ -217,7 +262,11 @@ class DateDialog(_BaseDateDialog):
         form.pack(padx=config.SPACING_XL, pady=config.SPACING_SM)
         ctk.CTkLabel(form, text="Date", font=ctk.CTkFont(size=12),
                      text_color=config.COLOR_TEXT_SECONDARY).pack(anchor="w")
-        make_date_picker(form, self.date_var).pack(anchor="w")
+        date_widget = make_date_picker(form, self.date_var)
+        date_widget.pack(anchor="w")
+        self.date_entry = date_widget.search_entry
+        if self._focus_date_entry:
+            self._date_entry = self.date_entry
 
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(padx=config.SPACING_XL, pady=(config.SPACING_MD, config.SPACING_LG))
@@ -267,12 +316,24 @@ def _resolve_company_id(parent: tk.Widget) -> int:
 
 
 def show_date_period_dialog(parent: tk.Widget,
-                            on_apply: Optional[Callable[[date, date], None]] = None) -> DatePeriodDialog:
-    """Open the modal Date Period window (Alt+F2)."""
-    return DatePeriodDialog(parent, on_apply)
+                            on_apply: Optional[Callable[[date, date], None]] = None,
+                            focus_date_entry: bool = False) -> DatePeriodDialog:
+    """Open the modal Date Period window (Alt+F2).
+
+    ``focus_date_entry`` (set by the Alt+F2 shortcut) focuses the From Date
+    entry so no mouse click is needed.
+    """
+    return DatePeriodDialog(parent, on_apply,
+                            focus_date_entry=focus_date_entry)
 
 
 def show_date_dialog(parent: tk.Widget,
-                     on_apply: Optional[Callable[[date], None]] = None) -> DateDialog:
-    """Open the modal single-date window (F2)."""
-    return DateDialog(parent, on_apply)
+                     on_apply: Optional[Callable[[date], None]] = None,
+                     focus_date_entry: bool = False) -> DateDialog:
+    """Open the modal single-date window (F2).
+
+    ``focus_date_entry`` (set by the F2 shortcut) focuses the date entry so
+    no mouse click is needed.
+    """
+    return DateDialog(parent, on_apply,
+                      focus_date_entry=focus_date_entry)
