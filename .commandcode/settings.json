@@ -471,7 +471,9 @@
       "Shell(cd \"/mnt/d/wind app/MyXpense\" && ls tests/ | head -30 && cat requirements.txt 2>/dev/null && which python3.13 python3.12 2>/dev/null; ls /usr/bin/python* 2>/dev/null)",
       "Shell(python3.14:*)",
       "Shell(cd \"/mnt/d/wind app/MyXpense\" && ls -d venv .venv env 2>/dev/null; ls /mnt/c/Python*/python.exe 2>/dev/null; ls /mnt/c/Users/*/AppData/Local/Programs/Python/*/python.exe 2>/dev/null | head -3; find / -maxdepth 4 -name \"python.exe\" 2>/dev/null | head -5)",
-      "Shell(cd \"/mnt/d/wind app/MyXpense\" && ls tests/test_*.py | xargs -n1 basename)"
+      "Shell(cd \"/mnt/d/wind app/MyXpense\" && ls tests/test_*.py | xargs -n1 basename)",
+      "Shell(mv:*)",
+      "Shell(cd \"/mnt/d/wind app/MyXpense\" && rm -f \"$(ls -t ~/Downloads/ExpenzoSetup-1.0.1.exe 2>/dev/null | head -1)\" 2>/dev/null; ls .e2e_* .smoke_* 2>/dev/null; git status --short | grep -E \"e2e|smoke|tmp\"; echo \"no temp files\")"
     ],
     "deny": [],
     "defaultMode": "default"

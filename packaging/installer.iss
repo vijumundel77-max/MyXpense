@@ -1,13 +1,18 @@
-; Expenzo 1.0.0 — Inno Setup installer (per-user, no admin).
-; Compiled with ISCC from packaging/build_release.ps1:
-;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer.iss
+; Expenzo — Inno Setup installer (per-user, no admin).
+; Compiled with ISCC from packaging/build_release.ps1, which sets
+; EXPENZO_BUILD_VERSION so the installer always carries the same version
+; that the app reports (version_service.py at the repo root).
 ;
 ; User data (database + exports) lives in %APPDATA%\Expenzo and is NEVER
 ; installed, uninstalled, or overwritten. Reinstalls/updates only overlay the
 ; program files, so existing user data is always preserved.
 
+#ifndef EXPENZO_BUILD_VERSION
+  #define EXPENZO_BUILD_VERSION "1.0.0"
+#endif
+
 #define MyAppName "Expenzo"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion EXPENZO_BUILD_VERSION
 #define MyAppPublisher "Expenzo"
 #define MyAppExeName "Expenzo.exe"
 

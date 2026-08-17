@@ -35,7 +35,9 @@ class DashboardFrame(ctk.CTkFrame):
         self.pack(fill="both", expand=True)
         self.company_id = company_id or self._resolve_company_id()
         self.data: Dict[str, Any] = {}
+        self._update_info: Optional[Dict[str, Any]] = None
 
+        self._build_update_banner()
         self._build_header()
         self._build_kpi_row()
         self._build_movement_row()
@@ -43,6 +45,128 @@ class DashboardFrame(ctk.CTkFrame):
         self._build_quick_actions()
         self._build_status()
         self.refresh()
+
+        # Check for updates in the background — never blocks startup and the
+        # app runs normally when the network is unavailable.
+        self._check_updates_async()
+
+    # ------------------------------------------------------------------ #
+    # update banner
+    # ------------------------------------------------------------------ #
+    def _build_update_banner(self) -> None:
+        self.update_banner = ctk.CTkFrame(
+            self, fg_color=config.COLOR_EXPENSE, corner_radius=0,
+        )
+        # Not packed until an update is actually available.
+
+    def _check_updates_async(self) -> None:
+        import queue
+        import threading
+        self._update_queue: "queue.Queue" = queue.Queue()
+
+        def _work() -> None:
+            try:
+                from services.update_manager import update_manager
+                info, _error = update_manager.check()
+            except Exception:
+                info = None
+            self._update_queue.put(info)
+
+        threading.Thread(target=_work, daemon=True).start()
+        # Poll the queue from the main thread (thread-safe: worker only puts).
+        self.after(300, self._poll_update_queue)
+
+    def _poll_update_queue(self) -> None:
+        try:
+            while True:
+                info = self._update_queue.get_nowait()
+                self._on_update_check_result(info)
+        except Exception:
+            pass
+        # Keep polling until the check completes.
+        if not getattr(self, "_update_poll_done", False):
+            self.after(300, self._poll_update_queue)
+
+    def _on_update_check_result(self, info: Optional[Dict[str, Any]]) -> None:
+        self._update_poll_done = True
+        if info is None:
+            return
+        self._update_info = info
+        self._show_update_banner(info)
+
+    def _show_update_banner(self, info: Dict[str, Any]) -> None:
+        version = info.get("version", "")
+        try:
+            self.update_banner.pack(fill="x")
+            for child in self.update_banner.winfo_children():
+                child.destroy()
+
+            inner = ctk.CTkFrame(self.update_banner, fg_color="transparent")
+            inner.pack(fill="x", padx=config.SPACING_XL, pady=config.SPACING_SM)
+
+            ctk.CTkLabel(
+                inner, text="⚠", font=ctk.CTkFont(size=16, weight="bold"),
+                text_color="#FFFFFF",
+            ).pack(side="left")
+            ctk.CTkLabel(
+                inner,
+                text=f"New version available — Expenzo v{version}",
+                font=ctk.CTkFont(size=13, weight="bold"),
+                text_color="#FFFFFF",
+            ).pack(side="left", padx=(config.SPACING_SM, 0))
+
+            ctk.CTkButton(
+                inner, text="Later", width=80, height=28,
+                corner_radius=config.BUTTON_CORNER_RADIUS,
+                fg_color="transparent", border_width=1,
+                border_color="#FFFFFF", text_color="#FFFFFF",
+                hover_color=config.COLOR_EXPENSE_HOVER,
+                command=self._dismiss_update_banner,
+            ).pack(side="right")
+            ctk.CTkButton(
+                inner, text="Update Now", width=110, height=28,
+                corner_radius=config.BUTTON_CORNER_RADIUS,
+                fg_color="#FFFFFF", text_color=config.COLOR_EXPENSE,
+                hover_color="#F3F4F6",
+                command=self._on_update_now,
+            ).pack(side="right", padx=(0, config.SPACING_SM))
+        except Exception:
+            pass
+
+    def _dismiss_update_banner(self) -> None:
+        """Later: hide the banner for the rest of this session only.  The
+        next app startup checks again."""
+        try:
+            self.update_banner.pack_forget()
+        except Exception:
+            pass
+
+    def _on_update_now(self) -> None:
+        """Update Now: download the installer with progress, then launch it
+        and close the app."""
+        info = self._update_info
+        if not info:
+            return
+        try:
+            from services.update_manager import update_manager
+            progress = UpdateProgressDialog(self.winfo_toplevel())
+
+            def _download() -> None:
+                # Worker thread: never touch Tk directly — enqueue results;
+                # the dialog's main-thread poll drives the UI.
+                try:
+                    path = update_manager.download(
+                        progress_callback=progress.set_progress,
+                        release_info=info,
+                    )
+                    progress._progress_queue.put(("done", str(path)))
+                except Exception as exc:
+                    progress._progress_queue.put(("error", str(exc)))
+
+            import threading
+            threading.Thread(target=_download, daemon=True).start()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # layout
@@ -708,3 +832,133 @@ class DashboardDetailDialog(ctk.CTkToplevel):
         except Exception:
             pass
         self.destroy()
+
+
+class UpdateProgressDialog(ctk.CTkToplevel):
+    """Modal progress dialog shown while the update installer downloads.
+
+    ``set_progress`` is called from the download worker thread, so it only
+    enqueues values; a main-thread poll updates the widgets (thread-safe).
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Updating Expenzo")
+        self.transient(parent)
+        self.resizable(False, False)
+        self.configure(fg_color=config.COLOR_BG_SECONDARY)
+
+        ctk.CTkLabel(
+            self, text="Downloading Expenzo update…",
+            font=ctk.CTkFont(size=15, weight="bold"),
+        ).pack(padx=config.SPACING_XL, pady=(config.SPACING_LG, config.SPACING_XS))
+        self.detail_var = tk.StringVar(value="Connecting…")
+        ctk.CTkLabel(
+            self, textvariable=self.detail_var,
+            font=ctk.CTkFont(size=12), text_color=config.COLOR_TEXT_SECONDARY,
+        ).pack(padx=config.SPACING_XL)
+
+        self.progress = ctk.CTkProgressBar(self, width=320)
+        self.progress.set(0)
+        self.progress.pack(padx=config.SPACING_XL, pady=config.SPACING_MD)
+
+        self.status_var = tk.StringVar(value="0%")
+        ctk.CTkLabel(
+            self, textvariable=self.status_var, font=ctk.CTkFont(size=11),
+            text_color=config.COLOR_TEXT_MUTED,
+        ).pack(padx=config.SPACING_XL, pady=(0, config.SPACING_LG))
+
+        import queue
+        self._progress_queue: "queue.Queue" = queue.Queue()
+        self._failed = False
+        self.update_idletasks()
+        try:
+            parent_x = parent.winfo_rootx()
+            parent_y = parent.winfo_rooty()
+            w, h = self.winfo_reqwidth(), self.winfo_reqheight()
+            self.geometry(f"+{parent_x + (parent.winfo_width() - w) // 2}+"
+                          f"{parent_y + (parent.winfo_height() - h) // 2}")
+        except Exception:
+            pass
+        self.grab_set()
+        self.focus_set()
+        self.protocol("WM_DELETE_WINDOW", lambda: None)  # not closable mid-download
+        self.after(100, self._poll_progress)
+
+    def _poll_progress(self) -> None:
+        try:
+            while True:
+                item = self._progress_queue.get_nowait()
+                kind = item[0]
+                if kind == "progress":
+                    _done, _total = item[1], item[2]
+                    self._render_progress(_done, _total)
+                elif kind == "done":
+                    self._failed = True
+                    self._complete(str(item[1]))
+                    return
+                elif kind == "error":
+                    self._failed = True
+                    self._fail(str(item[1]))
+                    return
+        except Exception:
+            pass
+        if self.winfo_exists() and not self._failed:
+            self.after(100, self._poll_progress)
+
+    def set_progress(self, done: int, total: Optional[int]) -> None:
+        # Worker thread: only enqueue; never touch Tk here.
+        try:
+            self._progress_queue.put(("progress", done, total))
+        except Exception:
+            pass
+
+    def _render_progress(self, done: int, total: Optional[int]) -> None:
+        try:
+            if total and total > 0:
+                fraction = min(1.0, done / total)
+                self.progress.set(fraction)
+                self.status_var.set(f"{int(fraction * 100)}%")
+                self.detail_var.set(f"{done // 1024} KB / {total // 1024} KB")
+            else:
+                self.detail_var.set(f"{done // 1024} KB downloaded")
+        except Exception:
+            pass
+
+    def _complete(self, installer_path: str) -> None:
+        """Download finished: close the dialog, launch the installer, and
+        close the app.  All on the main thread."""
+        try:
+            self.grab_release()
+            self.destroy()
+        except Exception:
+            pass
+        try:
+            from services.update_manager import update_manager
+            app = self.winfo_toplevel()
+
+            def _close() -> None:
+                try:
+                    app.destroy()
+                except Exception:
+                    pass
+
+            update_manager.launch_installer(installer_path, close_app=_close)
+        except Exception:
+            pass
+
+    def _fail(self, message: str) -> None:
+        """Download failed: close the dialog, leave the app fully intact."""
+        try:
+            self.grab_release()
+            self.destroy()
+        except Exception:
+            pass
+        try:
+            from utils import dialogs
+            dialogs.error("Update Failed",
+                          f"Could not download the update.\n\n{message}\n\n"
+                          "Your current Expenzo version is unchanged and safe.",
+                          parent=self.master)
+        except Exception:
+            pass

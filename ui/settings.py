@@ -32,6 +32,7 @@ class SettingsFrame(ctk.CTkFrame):
 
         self._build_company_card()
         self._build_theme_card()
+        self._build_update_card()
         self._build_general_card()
 
         from utils.keyboard import add_shortcut_bar
@@ -275,6 +276,149 @@ class SettingsFrame(ctk.CTkFrame):
                 app._apply_chrome()
             if hasattr(app, "_refresh_theme_toggle"):
                 app._refresh_theme_toggle(value.lower())
+
+    def _build_update_card(self) -> None:
+        """Software Update card: current/latest version, status, actions."""
+        from version_service import current_version
+
+        card = self._card("Software Update")
+        self._update_info = None
+
+        version_row = ctk.CTkFrame(card, fg_color="transparent")
+        version_row.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_SM))
+        ctk.CTkLabel(
+            version_row, text="Current Version", width=130, anchor="w",
+            text_color=config.COLOR_TEXT_SECONDARY,
+        ).pack(side="left")
+        self.current_version_label = ctk.CTkLabel(
+            version_row, text=f"v{current_version()}", font=ctk.CTkFont(size=13, weight="bold"),
+        )
+        self.current_version_label.pack(side="left")
+
+        latest_row = ctk.CTkFrame(card, fg_color="transparent")
+        latest_row.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_SM))
+        ctk.CTkLabel(
+            latest_row, text="Latest Version", width=130, anchor="w",
+            text_color=config.COLOR_TEXT_SECONDARY,
+        ).pack(side="left")
+        self.latest_version_label = ctk.CTkLabel(
+            latest_row, text="—", font=ctk.CTkFont(size=13, weight="bold"),
+        )
+        self.latest_version_label.pack(side="left")
+
+        status_row = ctk.CTkFrame(card, fg_color="transparent")
+        status_row.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_SM))
+        ctk.CTkLabel(
+            status_row, text="Status", width=130, anchor="w",
+            text_color=config.COLOR_TEXT_SECONDARY,
+        ).pack(side="left")
+        self.update_status_label = ctk.CTkLabel(
+            status_row, text="Check for updates to see the latest version.",
+            font=ctk.CTkFont(size=13), text_color=config.COLOR_TEXT_MUTED,
+        )
+        self.update_status_label.pack(side="left")
+
+        action_row = ctk.CTkFrame(card, fg_color="transparent")
+        action_row.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_LG))
+        self.btn_check_updates = ctk.CTkButton(
+            action_row, text="Check for Updates", width=160, height=32,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            command=self._check_updates,
+        )
+        self.btn_check_updates.pack(side="left", padx=(0, config.SPACING_SM))
+        self.btn_update_now = ctk.CTkButton(
+            action_row, text="Update Now", width=120, height=32,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            fg_color=config.COLOR_PRIMARY, hover_color=config.COLOR_PRIMARY_HOVER,
+            text_color="#FFFFFF", command=self._update_now,
+            state="disabled",
+        )
+        self.btn_update_now.pack(side="left")
+
+        # Run an initial background check so the section is populated on open
+        # (offline -> stays on the default "check" state, app runs normally).
+        self._check_updates()
+
+    def _check_updates(self) -> None:
+        """Reuse the shared update-check (no duplicated logic)."""
+        self.update_status_label.configure(
+            text="Checking for updates…", text_color=config.COLOR_TEXT_MUTED)
+        self.btn_check_updates.configure(state="disabled")
+
+        def _work() -> None:
+            try:
+                from services.update_manager import update_manager
+                info, error = update_manager.check()
+            except Exception as exc:
+                info, error = None, str(exc)
+            self._update_result_queue.put((info, error))
+
+        import queue
+        import threading
+        self._update_result_queue: "queue.Queue" = queue.Queue()
+        threading.Thread(target=_work, daemon=True).start()
+        # Poll from the main thread (worker only puts; never touches Tk).
+        self.after(200, self._poll_update_result)
+
+    def _poll_update_result(self) -> None:
+        try:
+            info, error = self._update_result_queue.get_nowait()
+        except Exception:
+            self.after(200, self._poll_update_result)
+            return
+        self._on_check_result(info, error)
+
+    def _on_check_result(self, info, error) -> None:
+        try:
+            self.btn_check_updates.configure(state="normal")
+        except Exception:
+            pass
+        if error:
+            self.update_status_label.configure(
+                text=f"Could not check for updates. {error}",
+                text_color=config.COLOR_WARNING)
+            self.btn_update_now.configure(state="disabled")
+            return
+        if info is None:
+            self.update_status_label.configure(
+                text="Up to date — you are running the latest version.",
+                text_color=config.COLOR_INCOME)
+            self.latest_version_label.configure(text=f"v{config.APP_VERSION}")
+            self.btn_update_now.configure(state="disabled")
+            return
+        self._update_info = info
+        self.latest_version_label.configure(text=f"v{info.get('version', '')}")
+        self.update_status_label.configure(
+            text="Update available — a newer version is ready to install.",
+            text_color=config.COLOR_EXPENSE)
+        self.btn_update_now.configure(state="normal")
+
+    def _update_now(self) -> None:
+        """Download + launch the installer, then close the app."""
+        info = self._update_info
+        if not info:
+            return
+        try:
+            from ui.dashboard import UpdateProgressDialog
+            from services.update_manager import update_manager
+            progress = UpdateProgressDialog(self.winfo_toplevel())
+
+            def _download() -> None:
+                # Worker thread: only enqueue; the dialog's main-thread poll
+                # handles completion / failure.
+                try:
+                    path = update_manager.download(
+                        progress_callback=progress.set_progress,
+                        release_info=info,
+                    )
+                    progress._progress_queue.put(("done", str(path)))
+                except Exception as exc:
+                    progress._progress_queue.put(("error", str(exc)))
+
+            import threading
+            threading.Thread(target=_download, daemon=True).start()
+        except Exception:
+            pass
 
     def _build_general_card(self) -> None:
         card = self._card("General")

@@ -11,7 +11,14 @@ from pathlib import Path
 # ==========================================
 APP_NAME = "Expenzo"
 APP_SUBTITLE = "Accounting"
-APP_VERSION = "1.0.0"
+
+# Central version management: the canonical version string lives in
+# version_service.py at the repo root (used by the installer/release scripts
+# too).  The installed release (per-user %APPDATA%\\Expenzo\\version.json)
+# wins over the compiled-in default so the app always knows which build it is.
+from version_service import current_version  # noqa: E402
+
+APP_VERSION = current_version()
 
 # ==========================================
 # PATHS
