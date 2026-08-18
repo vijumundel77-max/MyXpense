@@ -63,7 +63,7 @@ if (-not (Test-Path $ISCC)) {
 if (-not (Test-Path $ISCC)) {
     throw "Inno Setup ISCC.exe not found"
 }
-& $ISCC "packaging\installer.iss"
+& $ISCC "/DEXPENZO_BUILD_VERSION=$Version" "packaging\installer.iss"
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
 $Setup = Join-Path $RepoRoot "dist\ExpenzoSetup-$Version.exe"

@@ -83,6 +83,8 @@ def main() -> int:
         print(f"ERROR: invalid version {version!r} (expected MAJOR.MINOR.PATCH)", file=sys.stderr)
         return 1
 
+    notes_file = Path(args.notes_file) if args.notes_file else None
+
     installer = DIST / _installer_name(version)
     release_json = DIST / "release.json"
     if not installer.is_file():
@@ -110,7 +112,7 @@ def main() -> int:
         "sha256": sha,
     }
 
-    notes = build_release_notes(version, args.notes_file)
+    notes = build_release_notes(version, notes_file)
 
     if not args.dry_run:
         # Keep the repo-side metadata files in sync with this release.

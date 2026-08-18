@@ -25,7 +25,7 @@ from typing import Optional
 
 # The single source of truth for the CURRENT release.  Bump this for every
 # new release; the release builder reads it to name the installer and tag.
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # Version file name kept in the per-user data dir (same folder as the
 # database) — it records which release is installed on this machine.
