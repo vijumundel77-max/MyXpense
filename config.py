@@ -119,8 +119,10 @@ SIDEBAR_ACCENT_TEXT = "#BFDBFE"   # Blue-200 tint for active item text
 # Status & Financial Indicators
 COLOR_INCOME = "#10B981"          # Emerald Green 500
 COLOR_INCOME_HOVER = "#059669"
+COLOR_SUCCESS = "#10B981"         # Same as COLOR_INCOME
 COLOR_EXPENSE = "#EF4444"         # Crimson Red 500
 COLOR_EXPENSE_HOVER = "#DC2626"
+COLOR_HOVER_SURFACE = "#334155"   # Slate 700 (same as DARK_BG_TERTIARY)
 COLOR_TRANSFER = "#8B5CF6"        # Purple Accent 500
 COLOR_TRANSFER_HOVER = "#7C3AED"
 COLOR_WARNING = "#F59E0B"         # Amber Warning 500
@@ -148,9 +150,11 @@ FONT_FAMILY = "Segoe UI"  # Windows Native Clean Font
 FONT_HERO = (FONT_FAMILY, 24, "bold")
 FONT_TITLE = (FONT_FAMILY, 20, "bold")
 FONT_SUBTITLE = (FONT_FAMILY, 16, "bold")
+FONT_SUBTITLE_SIZE = 16
 FONT_BODY_BOLD = (FONT_FAMILY, 14, "bold")
 FONT_BODY = (FONT_FAMILY, 14, "normal")
 FONT_SMALL = (FONT_FAMILY, 12, "normal")
+FONT_SMALL_SIZE = 12
 FONT_SMALL_BOLD = (FONT_FAMILY, 12, "bold")
 
 # ==========================================

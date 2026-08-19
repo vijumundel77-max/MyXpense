@@ -1,44 +1,17 @@
 """
-Expenzo — Balance Sheet Report (Tally-style, with drill-down)
-
-Redesigned as a flat, full-height report — no card-style scroll regions:
-
-  * LEFT  = Liabilities & Capital
-  * RIGHT = Assets
-  * Both columns are equal width and equal height, and each side is a plain
-    Treeview that fills the whole available vertical space with compact rows.
-  * Internal scrollbars are hidden whenever every row fits; they appear only
-    when accounts overflow the window.
-  * Each side's TOTAL sits on a fixed bottom bar, both on the same horizontal
-    line, with a summary strip below: date, Total Liabilities & Capital,
-    Total Assets, Difference, and BALANCED / NOT BALANCED status.
-
-Accounting: the equation Assets = Liabilities + Capital is enforced by the
-existing balance_sheet_service (which reuses the trial-balance ledger
-calculation).  A computed Opening Balance Adjustment covers opening balances
-that were entered without a balancing capital entry, so the report reconciles
-without touching the data.
-
-Drill-down (unchanged from the previous design):
-
-  * Account row   -> Ledger / Account History dialog (Date | Voucher No. |
-                     Type | Particulars | Debit | Credit | Running Balance |
-                     Dr/Cr).  Enter on a voucher row opens the original
-                     voucher in the Vouchers screen.
-  * Group heading -> list of the ledgers inside that group.
-  * Keyboard: Up/Down move rows, Left/Right switch side, Enter opens,
-    Esc closes drill-down / backs out.
+Expenzo — Balance Sheet Report (Tally Prime-style, with drill-down)
 """
 from __future__ import annotations
 
 import tkinter as tk
 from datetime import date, datetime
 from tkinter import ttk
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import customtkinter as ctk
 
 import config
+from database.database import db
 from services.account_book_service import account_book_service
 from services.account_service import account_service
 from services.balance_sheet_service import (
@@ -59,17 +32,17 @@ from ui.report_base import (
 )
 from utils import dialogs
 
-# Treeview tag names used across the two side tables.
+# Treeview tag names
 TAG_HEADER = "bs_header"
 TAG_SUBTOTAL = "bs_subtotal"
 TAG_TOTAL = "bs_total"
 TAG_EVEN = "bs_even"
 TAG_ODD = "bs_odd"
+TAG_GROUP = "bs_group"
+TAG_SUBGROUP = "bs_subgroup"
 
-# Compact row height: normal data fits the window without internal scrolling.
 ROW_HEIGHT = 24
 
-# Ledger dialog columns (same order as the Ledger report screen).
 LEDGER_COLUMNS = [
     ("date", "Date", 90),
     ("number", "Voucher No.", 95),
@@ -83,7 +56,6 @@ LEDGER_COLUMNS = [
 
 
 def _parse_date(raw: Any) -> Optional[date]:
-    """Parse a date from display (DD-MM-YYYY) or ISO (YYYY-MM-DD) format."""
     if raw is None:
         return None
     if isinstance(raw, date):
@@ -101,56 +73,56 @@ def _format_date(raw: Any) -> str:
     return d.strftime(config.DISPLAY_DATE_FORMAT) if d else str(raw)
 
 
+def _format_indian(amount: float) -> str:
+    try:
+        val = round(float(amount or 0.0), 2)
+        sign = "-" if val < 0 else ""
+        val = abs(val)
+        integer_part = int(val)
+        decimal_part = round(val - integer_part, 2)
+        s = str(integer_part)
+        if len(s) <= 3:
+            formatted_int = s
+        else:
+            last3 = s[-3:]
+            rest = s[:-3]
+            parts = []
+            while len(rest) > 2:
+                parts.append(rest[-2:])
+                rest = rest[:-2]
+            if rest:
+                parts.append(rest)
+            formatted_int = ",".join(reversed(parts)) + "," + last3
+        if decimal_part > 0:
+            return f"{sign}{formatted_int}.{int(round(decimal_part * 100)):02d}"
+        return f"{sign}{formatted_int}.00"
+    except Exception:
+        return f"{amount:,.2f}"
+
+
 class _SidePanel(ctk.CTkFrame):
-    """One side of the balance sheet (Liabilities & Capital | Assets).
-
-    A flat, full-height Treeview with a fixed bottom total bar.  The
-    scrollbar is hidden whenever every row fits; it only appears when the
-    account list overflows the available height.
-
-    ``rows`` is a list of dicts: ``kind`` (account/heading/subtotal/total),
-    ``name``, ``amount_text``, ``account_id``, ``entry`` (service entry for
-    drill-down) and ``children`` (ledger list for group headings).
-    """
-
     def __init__(self, parent, title: str):
-        super().__init__(
-            parent, fg_color="transparent",
-        )
+        super().__init__(parent, fg_color="transparent")
         self.title = title
         self.rows: List[Dict[str, Any]] = []
+        self._group_children = {}
+        self._group_subtotal = {}
+        self._expanded = set()
 
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", pady=(0, config.SPACING_XS))
-        ctk.CTkLabel(
-            header, text=title, font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(side="left")
-        self.count_label = ctk.CTkLabel(
-            header, text="", font=ctk.CTkFont(size=11),
-            text_color=config.COLOR_TEXT_MUTED,
-        )
-        self.count_label.pack(side="left", padx=(config.SPACING_SM, 0))
-
-        tree_frame = ctk.CTkFrame(self, fg_color="transparent")
-        tree_frame.pack(fill="both", expand=True)
-        tree_frame.grid_rowconfigure(0, weight=1)
-        tree_frame.grid_columnconfigure(0, weight=1)
+        if "Liabilities" in title:
+            self.total_label = ctk.CTkLabel(self, text="Total Liabilities & Capital")
+        else:
+            self.total_label = ctk.CTkLabel(self, text="Total Assets")
 
         self.tree = ttk.Treeview(
-            tree_frame, columns=("account", "amount"), show="headings",
+            self, columns=("account", "amount"), show="headings",
             selectmode="browse", style="Treeview",
         )
-        self.tree.heading("account", text="Account", anchor="w")
-        self.tree.heading("amount", text="Amount", anchor="e")
-        self.tree.column("account", width=220, anchor="w", stretch=True)
-        self.tree.column("amount", width=140, anchor="e", stretch=False)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-
-        # Thin scrollbar; only packed when the rows overflow.
-        self.vsb = ttk.Scrollbar(tree_frame, orient="vertical",
-                                 command=self.tree.yview)
-        self.tree.configure(yscrollcommand=self.vsb.set)
-        self._scrollbar_shown = False
+        self.tree.heading("account", text="", anchor="w")
+        self.tree.heading("amount", text="", anchor="e")
+        self.tree.column("account", width=280, anchor="w", stretch=True)
+        self.tree.column("amount", width=160, anchor="e", stretch=False)
+        self.tree.pack(fill="both", expand=True, padx=0, pady=0)
 
         try:
             style = ttk.Style(self.tree)
@@ -158,103 +130,102 @@ class _SidePanel(ctk.CTkFrame):
         except Exception:
             pass
 
-        # Fixed bottom total bar — same horizontal line on both sides.
-        total_bar = ctk.CTkFrame(
-            self, fg_color=config.COLOR_BG_TERTIARY, corner_radius=8,
-            height=34,
-        )
-        total_bar.pack(fill="x", pady=(config.SPACING_SM, 0))
-        total_bar.pack_propagate(False)
-        self.total_label = ctk.CTkLabel(
-            total_bar, text="", font=ctk.CTkFont(size=13, weight="bold"),
-            text_color=config.COLOR_PRIMARY, anchor="w",
-        )
-        self.total_label.pack(fill="both", padx=config.SPACING_MD,
-                              pady=config.SPACING_XS)
-
-        # Re-evaluate whether the scrollbar is needed on resize/render.
-        self.tree.bind("<Configure>", lambda _e: self._refresh_scrollbar())
-
-    # ------------------------------------------------------------------ #
-    def _refresh_scrollbar(self) -> None:
-        """Hide the scrollbar when every row fits, show it only on overflow."""
-        try:
-            if self.tree.winfo_height() <= 1 or not self.tree.get_children():
-                return
-            content_height = len(self.tree.get_children()) * ROW_HEIGHT
-            needs = content_height > self.tree.winfo_height()
-            if needs and not self._scrollbar_shown:
-                self.vsb.grid(row=0, column=1, sticky="ns")
-                self._scrollbar_shown = True
-            elif not needs and self._scrollbar_shown:
-                self.vsb.grid_forget()
-                self._scrollbar_shown = False
-        except Exception:
-            pass
+        self.tree.bind("<<TreeviewOpen>>", self._on_open)
+        self.tree.bind("<<TreeviewClose>>", self._on_close)
+        self._scrollbar_shown = False
 
     def clear(self) -> None:
         self.rows.clear()
+        self._group_children.clear()
+        self._group_subtotal.clear()
+        self._expanded.clear()
         for item in self.tree.get_children():
             self.tree.delete(item)
-        self._refresh_scrollbar()
 
-    def _insert(self, kind: str, tags: str, name: str, amount_text: str,
-                account_id: Optional[int], entry: Optional[Dict[str, Any]],
-                children: Optional[List[Dict[str, Any]]] = None) -> None:
-        iid = f"{self.title.replace(' ', '_')}-{len(self.rows)}"
-        self.tree.insert("", tk.END, iid=iid, values=(name, amount_text),
-                         tags=(tags,))
+    def _make_iid(self, prefix: str) -> str:
+        return f"{self.title.replace(' ', '_')}-{prefix}-{len(self.rows)}"
+
+    def _insert_node(self, parent_iid: str, kind: str, tags: str, name: str,
+                     amount_text: str, account_id: Optional[int],
+                     entry: Optional[Dict[str, Any]], level: int = 0) -> str:
+        display_name = ("    " * level) + name
+        iid = self._make_iid(kind)
+        self.tree.insert(parent_iid, "end", iid=iid,
+                         values=(display_name, amount_text), tags=(tags,))
         self.rows.append({
             'kind': kind, 'name': name, 'amount_text': amount_text,
-            'account_id': account_id, 'entry': entry, 'children': children or [],
+            'account_id': account_id, 'entry': entry, 'children': [],
+            'level': level, 'iid': iid,
         })
+        return iid
 
-    def add_heading(self, name: str, children: List[Dict[str, Any]]) -> None:
-        self._insert("heading", TAG_HEADER, name, "", None, None, children)
+    def add_group_heading(self, name: str, total_amount: float, children: List[Dict[str, Any]]) -> str:
+        amount_text = _format_indian(total_amount)
+        iid = self._insert_node("", "heading", TAG_GROUP, name, amount_text, None, None, level=0)
+        self._group_children[iid] = children
+        self.tree.item(iid, open=False)
+        return iid
 
-    def add_account(self, entry: Dict[str, Any]) -> None:
+    def add_account(self, entry: Dict[str, Any], parent_iid: Optional[str] = None) -> None:
         amount = float(entry.get('net_balance', 0) or 0)
         tag = TAG_EVEN if len(self.rows) % 2 == 0 else TAG_ODD
-        self._insert("account", tag, str(entry.get('account_name', '')),
-                     f"{amount:,.2f}", entry.get('account_id'), entry)
+        level = 1 if parent_iid else 0
+        self._insert_node(parent_iid or "", "account", tag,
+                          str(entry.get('account_name', '')),
+                          _format_indian(amount), entry.get('account_id'), entry, level)
 
-    def add_subtotal(self, name: str, amount: float) -> None:
-        self._insert("subtotal", TAG_SUBTOTAL, name, f"{amount:,.2f}", None, None)
+    def add_subtotal(self, name: str, amount: float, parent_iid: Optional[str] = None) -> None:
+        self._insert_node(parent_iid or "", "subtotal", TAG_SUBTOTAL,
+                          name, _format_indian(amount), None, None, level=1)
 
     def add_total(self, name: str, amount: float) -> None:
-        self._insert("total", TAG_TOTAL, name, f"{amount:,.2f}", None, None)
+        self._insert_node("", "total", TAG_TOTAL, name,
+                          _format_indian(amount), None, None, level=0)
 
-    def set_total_text(self, text: str) -> None:
-        self.total_label.configure(text=text)
+    def _on_open(self, event) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if iid in self._group_children and iid not in self._expanded:
+            self._expanded.add(iid)
+            children = self._group_children.get(iid, [])
+            for entry in children:
+                self.add_account(entry, parent_iid=iid)
 
-    def set_count(self, count: int) -> None:
-        self.count_label.configure(text=f"{count} ledgers")
+    def _on_close(self, event) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if iid in self._expanded:
+            for child in self.tree.get_children(iid):
+                self.tree.delete(child)
+            self._expanded.discard(iid)
 
     def selected_row(self) -> Optional[Dict[str, Any]]:
         selection = self.tree.selection()
         if not selection:
             return None
+        iid = selection[0]
+        for row in self.rows:
+            if row.get('iid') == iid:
+                return row
         try:
-            return self.rows[int(selection[0].rsplit("-", 1)[1])]
-        except (ValueError, IndexError):
+            idx = self.tree.index(iid)
+            return self.rows[idx]
+        except Exception:
             return None
 
     def select_index(self, index: int) -> None:
-        if not (0 <= index < len(self.rows)):
-            return
-        item = self.tree.get_children()[index]
-        self.tree.selection_set(item)
-        self.tree.see(item)
+        children = self.tree.get_children("")
+        if 0 <= index < len(children):
+            item = children[index]
+            self.tree.selection_set(item)
+            self.tree.see(item)
 
 
 class _DrillDownDialog(ctk.CTkToplevel):
-    """Modal drill-down dialog: ledger history or group ledger list.
-
-    ``rows`` is a list of dicts.  Ledger view rows carry ``kind``
-    'opening'/'ledger_row'/'closing'; group view rows carry 'account'/'total'.
-    ``on_open`` is called with the selected entry when Enter/double-click.
-    """
-
     def __init__(self, parent, title: str, subtitle: str,
                  rows: List[Dict[str, Any]],
                  on_open: Optional[Any] = None,
@@ -271,8 +242,7 @@ class _DrillDownDialog(ctk.CTkToplevel):
         self._opened = False
 
         container = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        container.pack(fill="both", expand=True, padx=config.SPACING_LG,
-                       pady=config.SPACING_LG)
+        container.pack(fill="both", expand=True, padx=config.SPACING_LG, pady=config.SPACING_LG)
         container.grid_rowconfigure(2, weight=1)
         container.grid_columnconfigure(0, weight=1)
 
@@ -284,13 +254,9 @@ class _DrillDownDialog(ctk.CTkToplevel):
         ).pack(side="left")
         title_block = ctk.CTkFrame(head, fg_color="transparent")
         title_block.pack(side="left", padx=(config.SPACING_MD, 0))
-        ctk.CTkLabel(
-            title_block, text=title, font=ctk.CTkFont(size=15, weight="bold"),
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            title_block, text=subtitle, font=ctk.CTkFont(size=12),
-            text_color=config.COLOR_TEXT_SECONDARY,
-        ).pack(anchor="w")
+        ctk.CTkLabel(title_block, text=title, font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(title_block, text=subtitle, font=ctk.CTkFont(size=12),
+                      text_color=config.COLOR_TEXT_SECONDARY).pack(anchor="w")
 
         self.summary_label = ctk.CTkLabel(
             container, text="", font=ctk.CTkFont(size=12),
@@ -344,7 +310,6 @@ class _DrillDownDialog(ctk.CTkToplevel):
         self.after(60, lambda: (self.lift(), self.tree.focus_set()))
         self.grab_set()
 
-    # ------------------------------------------------------------------ #
     def _render(self, rows: List[Dict[str, Any]]) -> None:
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -356,9 +321,9 @@ class _DrillDownDialog(ctk.CTkToplevel):
                     row.get('voucher_number', ''),
                     row.get('voucher_type', ''),
                     row.get('particulars', ''),
-                    f"{float(row.get('debit_amount', 0) or 0):,.2f}",
-                    f"{float(row.get('credit_amount', 0) or 0):,.2f}",
-                    f"{float(row.get('running_balance', 0) or 0):,.2f}",
+                    _format_indian(float(row.get('debit_amount', 0) or 0)),
+                    _format_indian(float(row.get('credit_amount', 0) or 0)),
+                    _format_indian(float(row.get('running_balance', 0) or 0)),
                     row.get('balance_type', ''),
                 )
                 tags = ('bs_even' if index % 2 == 0 else 'bs_odd',)
@@ -367,11 +332,11 @@ class _DrillDownDialog(ctk.CTkToplevel):
                 tags = ('bs_header',)
             elif row.get('kind') == 'total':
                 values = (row.get('name', ''),
-                          f"{float(row.get('amount', 0) or 0):,.2f}")
+                          _format_indian(float(row.get('amount', 0) or 0)))
                 tags = ('bs_total',)
             else:
                 values = (row.get('name', ''),
-                          f"{float(row.get('amount', 0) or 0):,.2f}")
+                          _format_indian(float(row.get('amount', 0) or 0)))
                 tags = ('bs_even' if index % 2 == 0 else 'bs_odd',)
             iid = f"r{index}"
             self.tree.insert("", tk.END, iid=iid, values=values, tags=tags)
@@ -391,13 +356,13 @@ class _DrillDownDialog(ctk.CTkToplevel):
                 credit = (credit or 0.0) + float(row.get('credit_amount', 0) or 0)
         parts = []
         if opening is not None:
-            parts.append(f"Opening: {opening:,.2f}")
+            parts.append(f"Opening: {_format_indian(opening)}")
         if debit is not None:
-            parts.append(f"Debit: {debit:,.2f}")
+            parts.append(f"Debit: {_format_indian(debit)}")
         if credit is not None:
-            parts.append(f"Credit: {credit:,.2f}")
+            parts.append(f"Credit: {_format_indian(credit)}")
         if closing is not None:
-            parts.append(f"Closing: {closing:,.2f}")
+            parts.append(f"Closing: {_format_indian(closing)}")
         if parts:
             self.summary_label.configure(text="   |   ".join(parts))
 
@@ -429,8 +394,6 @@ class _DrillDownDialog(ctk.CTkToplevel):
 
 
 class BalanceSheetReportUI:
-    """Tally-style, drillable Balance Sheet report screen."""
-
     def __init__(self, parent: tk.Widget, company_id: int):
         self.parent = parent
         self.company_id = company_id
@@ -439,124 +402,176 @@ class BalanceSheetReportUI:
         self._focused_side: str = "left"
         self._saved_selection: Dict[int, int] = {0: 0, 1: 0}
 
+        # MAIN CONTAINER
         self.main_frame = ctk.CTkFrame(parent, corner_radius=0, fg_color="transparent")
-        self.main_frame.pack(fill="both", expand=True, padx=config.SPACING_XL,
-                             pady=config.SPACING_XL)
+        self.main_frame.pack(fill="both", expand=True, padx=0, pady=0)
+        self.main_frame.grid_rowconfigure(0, weight=0)   # Top Bar
+        self.main_frame.grid_rowconfigure(1, weight=0)   # Column Header
+        self.main_frame.grid_rowconfigure(2, weight=1)   # Main Body (Tables stretch)
+        self.main_frame.grid_rowconfigure(3, weight=0)   # Summary Bar
+        self.main_frame.grid_rowconfigure(4, weight=0)   # Status Bar
+        self.main_frame.grid_columnconfigure(0, weight=1)
 
-        ReportBackHeader(self.main_frame, "Balance Sheet",
-                         "Assets = Liabilities + Capital", on_back=self._back)
+        # 1. TOP BAR (Height: 32px)
+        top_bar = ctk.CTkFrame(self.main_frame, fg_color=config.COLOR_BG_TERTIARY, height=32, corner_radius=0)
+        top_bar.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
+        top_bar.pack_propagate(False)
+        top_bar.grid_columnconfigure(0, weight=1)
+        top_bar.grid_columnconfigure(1, weight=0)
+        top_bar.grid_columnconfigure(2, weight=0)
 
-        filters = FilterBar(self.main_frame)
+        left_top = ctk.CTkFrame(top_bar, fg_color="transparent")
+        left_top.grid(row=0, column=0, sticky="w", padx=8, pady=2)
+        ctk.CTkButton(left_top, text="←", width=26, height=22,
+                      corner_radius=4, fg_color="transparent",
+                      text_color=config.COLOR_TEXT_PRIMARY,
+                      font=ctk.CTkFont(size=12, weight="bold"),
+                      command=self._back).pack(side="left")
+        ctk.CTkLabel(left_top, text="Balance Sheet",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=config.COLOR_TEXT_PRIMARY).pack(side="left", padx=(6, 0))
+
         self.as_on_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
-        filters.add("As On Date", make_date_picker(filters.body, self.as_on_date_var))
-        filters.add_actions(
-            make_button(filters.body, "Generate", self._generate_report, accent=True),
-            make_button(filters.body, "Clear", self._clear_filters),
-        )
-        filters.add_modify_filters()
+        filter_frame = ctk.CTkFrame(top_bar, fg_color="transparent")
+        filter_frame.grid(row=0, column=1, sticky="ew", padx=8)
+        ctk.CTkLabel(filter_frame, text="As on", font=ctk.CTkFont(size=11),
+                     text_color=config.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        make_date_picker(filter_frame, self.as_on_date_var).pack(side="left", padx=(0, 8))
+        make_button(filter_frame, "Generate", self._generate_report, width=80, accent=True).pack(side="left", padx=2)
+        make_button(filter_frame, "Clear", self._clear_filters, width=60).pack(side="left", padx=2)
 
-        # Flat report body: equal-width, equal-height side tables.
+        right_top = ctk.CTkFrame(top_bar, fg_color="transparent")
+        right_top.grid(row=0, column=2, sticky="e", padx=8, pady=2)
+        make_button(right_top, "CSV", self._export_to_csv, width=50).pack(side="left", padx=1)
+        make_button(right_top, "JSON", self._export_to_json, width=50).pack(side="left", padx=1)
+        make_button(right_top, "PNG", self._export_to_png, width=50).pack(side="left", padx=1)
+
+        # 2. COLUMN HEADERS (Height: 34px)
+        self.company_header = ctk.CTkFrame(self.main_frame, fg_color=config.COLOR_BG_SECONDARY, height=34, corner_radius=0)
+        self.company_header.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
+        self.company_header.pack_propagate(False)
+        self.company_header.grid_columnconfigure(0, weight=1)
+        self.company_header.grid_columnconfigure(1, weight=1)
+
+        left_header = ctk.CTkFrame(self.company_header, fg_color="transparent")
+        left_header.grid(row=0, column=0, sticky="nsew", padx=(12, 6))
+        left_header.grid_columnconfigure(0, weight=1)
+        left_header.grid_columnconfigure(1, weight=0)
+        self.left_header_label = ctk.CTkLabel(
+            left_header, text="Liabilities",
+            font=ctk.CTkFont(size=12, weight="bold"), anchor="w",
+        )
+        self.left_header_label.grid(row=0, column=0, sticky="ew")
+        self.left_sub_label = ctk.CTkLabel(
+            left_header, text="", font=ctk.CTkFont(size=10),
+            text_color=config.COLOR_TEXT_MUTED, anchor="e",
+        )
+        self.left_sub_label.grid(row=0, column=1, sticky="e")
+
+        right_header = ctk.CTkFrame(self.company_header, fg_color="transparent")
+        right_header.grid(row=0, column=1, sticky="nsew", padx=(6, 12))
+        right_header.grid_columnconfigure(0, weight=1)
+        right_header.grid_columnconfigure(1, weight=0)
+        self.right_header_label = ctk.CTkLabel(
+            right_header, text="Assets",
+            font=ctk.CTkFont(size=12, weight="bold"), anchor="w",
+        )
+        self.right_header_label.grid(row=0, column=0, sticky="ew")
+        self.right_sub_label = ctk.CTkLabel(
+            right_header, text="", font=ctk.CTkFont(size=10),
+            text_color=config.COLOR_TEXT_MUTED, anchor="e",
+        )
+        self.right_sub_label.grid(row=0, column=1, sticky="e")
+
+        # 3. BODY (Takes remaining screen height)
         self.body = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        self.body.pack(fill="both", expand=True, pady=(config.SPACING_SM, 0))
+        self.body.grid(row=2, column=0, sticky="nsew", padx=0, pady=0)
         self.body.grid_rowconfigure(0, weight=1)
         self.body.grid_columnconfigure(0, weight=1, uniform="side")
         self.body.grid_columnconfigure(1, weight=1, uniform="side")
 
-        self.left_panel = _SidePanel(self.body, "Liabilities & Capital")
-        self.left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, config.SPACING_MD))
+        self.left_panel = _SidePanel(self.body, "Liabilities")
+        self.left_panel.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=4)
 
         self.right_panel = _SidePanel(self.body, "Assets")
-        self.right_panel.grid(row=0, column=1, sticky="nsew", padx=(config.SPACING_MD, 0))
+        self.right_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=4)
 
-        # Summary strip below both totals: date | totals | difference | status.
+        # 4. SUMMARY BAR (Clear height of 52px so values show properly)
         self.summary_bar = ctk.CTkFrame(
             self.main_frame, fg_color=config.COLOR_BG_SECONDARY,
-            corner_radius=config.CARD_CORNER_RADIUS,
-            border_width=1, border_color=config.COLOR_CARD_BORDER,
-            height=44,
+            corner_radius=6, height=52,
         )
-        self.summary_bar.pack(fill="x", pady=(config.SPACING_SM, 0))
+        self.summary_bar.grid(row=3, column=0, sticky="ew", padx=12, pady=(2, 2))
         self.summary_bar.pack_propagate(False)
         self._build_summary_bar()
 
-        ReportActionBar(
-            self.main_frame,
-            refresh=self._generate_report,
-            exports=[("Export CSV", self._export_to_csv),
-                     ("Export JSON", self._export_to_json),
-                     ("Export PNG", self._export_to_png)],
-            clear=self._clear_filters,
-            back=self._back,
+        # 5. STATUS BAR
+        self.status_var = tk.StringVar(value="Ready")
+        self.status_label = ctk.CTkLabel(
+            self.main_frame, textvariable=self.status_var,
+            font=ctk.CTkFont(size=10), text_color=config.COLOR_TEXT_SECONDARY,
+            anchor="w", height=18,
         )
+        self.status_label.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 4))
 
-        self.status = ReportStatusBar(self.main_frame)
+        self.status = type('Status', (object,), {'status_var': self.status_var})()
+
         wire_report_keyboard(self)
         self._configure_tree_tags()
         self._wire_keyboard()
 
-    # ------------------------------------------------------------------ #
-    # summary bar
-    # ------------------------------------------------------------------ #
     def _build_summary_bar(self) -> None:
-        for col in range(4):
-            self.summary_bar.grid_columnconfigure(col, weight=1)
-        self._summary_values: Dict[str, ctk.CTkLabel] = {}
+        cells_frame = ctk.CTkFrame(self.summary_bar, fg_color="transparent")
+        cells_frame.pack(fill="both", expand=True, padx=12, pady=2)
+        for i in range(4):
+            cells_frame.grid_columnconfigure(i, weight=1)
+        cells_frame.grid_columnconfigure(4, weight=0)
 
         def _cell(col, label_text):
-            cell = ctk.CTkFrame(self.summary_bar, fg_color="transparent")
-            cell.grid(row=0, column=col, sticky="nsew", padx=config.SPACING_MD)
+            cell = ctk.CTkFrame(cells_frame, fg_color="transparent")
+            cell.grid(row=0, column=col, sticky="w", pady=1)
             ctk.CTkLabel(
-                cell, text=label_text, font=ctk.CTkFont(size=10),
+                cell, text=label_text, font=ctk.CTkFont(size=9),
                 text_color=config.COLOR_TEXT_MUTED, anchor="w",
             ).pack(anchor="w")
             value = ctk.CTkLabel(
-                cell, text="", font=ctk.CTkFont(size=13, weight="bold"),
+                cell, text="-", font=ctk.CTkFont(size=11, weight="bold"),
                 text_color=config.COLOR_TEXT_PRIMARY, anchor="w",
             )
             value.pack(anchor="w")
             return value
 
+        self._summary_values: Dict[str, ctk.CTkLabel] = {}
         self._summary_values['date'] = _cell(0, "Balance Sheet as of")
         self._summary_values['liab_capital'] = _cell(1, "Total Liabilities & Capital")
         self._summary_values['assets'] = _cell(2, "Total Assets")
         self._summary_values['difference'] = _cell(3, "Difference")
 
-        # Status chip on the right edge of the summary strip.
         self.status_chip = ctk.CTkLabel(
-            self.summary_bar, text="", font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color=config.COLOR_BG_TERTIARY, corner_radius=8,
-            padx=14, pady=6, text_color=config.COLOR_TEXT_PRIMARY,
+            cells_frame, text="BALANCED ✓", font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=config.COLOR_INCOME, corner_radius=4,
+            padx=12, pady=4, text_color="#FFFFFF",
         )
-        self.status_chip.grid(row=0, column=4, sticky="e", padx=config.SPACING_LG)
+        self.status_chip.grid(row=0, column=4, sticky="e", padx=(10, 0), pady=4)
 
-    # ------------------------------------------------------------------ #
-    # construction helpers
-    # ------------------------------------------------------------------ #
     def _configure_tree_tags(self) -> None:
         style = ttk.Style(self.left_panel.tree)
         for tag, fg, bg, bold in [
+            (TAG_GROUP, config.COLOR_TEXT_PRIMARY, config.COLOR_BG_PRIMARY, True),
+            (TAG_SUBGROUP, config.COLOR_TEXT_PRIMARY, config.COLOR_BG_PRIMARY, True),
             (TAG_HEADER, config.COLOR_TEXT_SECONDARY, config.COLOR_BG_MUTED, True),
             (TAG_SUBTOTAL, config.COLOR_TEXT_PRIMARY, config.COLOR_BG_TERTIARY, True),
             (TAG_TOTAL, config.COLOR_PRIMARY, config.COLOR_BG_TERTIARY, True),
-            (TAG_EVEN, config.COLOR_TEXT_PRIMARY, config.COLOR_BG_MUTED, False),
+            (TAG_EVEN, config.COLOR_TEXT_PRIMARY, config.COLOR_BG_PRIMARY, False),
             (TAG_ODD, config.COLOR_TEXT_PRIMARY, config.COLOR_BG_SECONDARY, False),
         ]:
             try:
                 style.configure(tag, foreground=fg, background=bg,
-                                font=(config.FONT_FAMILY, 12, "bold" if bold else "normal"))
+                                font=(config.FONT_FAMILY, 11, "bold" if bold else "normal"))
             except Exception:
                 pass
-        try:
-            style.map(TAG_TOTAL, background=[("selected", config.COLOR_PRIMARY)],
-                      foreground=[("selected", "#FFFFFF")])
-            style.map(TAG_HEADER, background=[("selected", config.COLOR_BG_TERTIARY)],
-                      foreground=[("selected", config.COLOR_TEXT_PRIMARY)])
-        except Exception:
-            pass
 
     def _wire_keyboard(self) -> None:
-        """Row navigation on both trees: Up/Down within a side, Left/Right
-        switch side, Enter opens, Esc closes drill-down / backs out."""
         for panel in (self.left_panel, self.right_panel):
             tree = panel.tree
             tree.bind("<Up>", lambda _e, p=panel: self._move_selection(p, -1))
@@ -570,16 +585,12 @@ class BalanceSheetReportUI:
 
         self.main_frame.bind("<Escape>", lambda _e: self._handle_escape())
         try:
-            self.main_frame.winfo_toplevel().bind(
-                "<Escape>", lambda _e: self._handle_escape(), add="+")
+            self.main_frame.winfo_toplevel().bind("<Escape>", lambda _e: self._handle_escape(), add="+")
         except Exception:
             pass
         self.main_frame.bind("<Destroy>", self._on_destroy, add="+")
 
     def _handle_escape(self, _event=None) -> str:
-        """Esc: close the drill-down first (never both at once), otherwise
-        delegate to the report's back handler.  Always returns 'break' so the
-        app-wide Esc binding does not also fire."""
         if self._drill is not None:
             try:
                 self._drill._close()
@@ -604,9 +615,6 @@ class BalanceSheetReportUI:
                 pass
             self._drill = None
 
-    # ------------------------------------------------------------------ #
-    # navigation
-    # ------------------------------------------------------------------ #
     def _side_index(self, panel) -> int:
         return 0 if panel is self.left_panel else 1
 
@@ -645,17 +653,12 @@ class BalanceSheetReportUI:
             return
         index = panel.tree.index(panel.tree.selection()[0])
         self._saved_selection[self._side_index(panel)] = index
-        if row['kind'] == "heading":
-            self._open_group_detail(row)
+        if row['kind'] in ("group", "heading"):
+            self._open_group_detail(panel, row)
         elif row['kind'] == "account":
             self._open_account_ledger(row['entry'])
 
-    # ------------------------------------------------------------------ #
-    # drill-down
-    # ------------------------------------------------------------------ #
     def _drill_filters(self) -> Dict[str, Any]:
-        """The current as-on date (the ledger dialog shows the full history
-        from the start of the books to the as-on date)."""
         as_on = _parse_date(self.as_on_date_var.get())
         if as_on is None:
             as_on = date.today()
@@ -706,11 +709,11 @@ class BalanceSheetReportUI:
         self._drill = _DrillDownDialog(
             self.main_frame, "Account Ledger", name, rows,
             on_open=self._open_voucher_from_row, account_id=account_id)
-        self._drill.summary_label.configure(
-            text=f"Ledger: {name}   |   {subtitle}")
+        self._drill.summary_label.configure(text=f"Ledger: {name}   |   {subtitle}")
 
-    def _open_group_detail(self, row: Dict[str, Any]) -> None:
-        children = row.get('children', [])
+    def _open_group_detail(self, panel: _SidePanel, row: Dict[str, Any]) -> None:
+        iid = row.get('iid')
+        children = panel._group_children.get(iid, [])
         if not children:
             return
         rows: List[Dict[str, Any]] = []
@@ -750,8 +753,6 @@ class BalanceSheetReportUI:
         self._route_to_vouchers(voucher)
 
     def _route_to_vouchers(self, voucher: Dict[str, Any]) -> None:
-        """Leave the reports hub, open the Vouchers screen and load the
-        voucher — same route the Ledger report uses."""
         try:
             app = self.main_frame.winfo_toplevel()
             if hasattr(app, "show_vouchers"):
@@ -762,27 +763,21 @@ class BalanceSheetReportUI:
         except Exception:
             pass
 
-    # ------------------------------------------------------------------ #
-    # report generation / rendering
-    # ------------------------------------------------------------------ #
     def _back(self) -> None:
         self._handle_escape()
 
     def _clear_filters(self) -> None:
         self.as_on_date_var.set(date.today().strftime(config.DISPLAY_DATE_FORMAT))
-        self.status.set("Filters cleared")
+        self.status_var.set("Filters cleared")
 
     def _generate_report(self) -> None:
         as_on = _parse_date(self.as_on_date_var.get())
         if not as_on:
-            dialogs.warn("Balance Sheet", "Invalid date. Use DD-MM-YYYY format.",
-                         parent=self.parent)
+            dialogs.warn("Balance Sheet", "Invalid date. Use DD-MM-YYYY format.", parent=self.parent)
             return
         report = balance_sheet_service.generate_balance_sheet(self.company_id, as_on)
         if not report.get('success'):
-            dialogs.error("Balance Sheet",
-                          report.get('error', 'Failed to generate report'),
-                          parent=self.parent)
+            dialogs.error("Balance Sheet", report.get('error', 'Failed to generate report'), parent=self.parent)
             return
         self.current_report_data = report
         self._render(report)
@@ -792,78 +787,101 @@ class BalanceSheetReportUI:
         totals = report.get('totals', {})
         as_on = _parse_date(str(report.get('as_on_date', '')))
 
+        company_name = "Company"
+        try:
+            row = db.fetch_one("SELECT name FROM companies WHERE id = ?", (self.company_id,))
+            if row:
+                company_name = row["name"]
+        except Exception:
+            pass
+
+        self.left_header_label.configure(text="Liabilities")
+        self.left_sub_label.configure(text=f"{company_name}  as at {_format_date(as_on)}")
+        self.right_header_label.configure(text="Assets")
+        self.right_sub_label.configure(text=f"{company_name}  as at {_format_date(as_on)}")
+
         # ---- LEFT: Liabilities & Capital ----
         left = self.left_panel
         left.clear()
         liab_entries = sections.get(TYPE_LIABILITIES, [])
         capital_entries = sections.get(TYPE_CAPITAL, [])
+
         if liab_entries:
-            left.add_heading("Liabilities", liab_entries)
-            for entry in liab_entries:
-                left.add_account(entry)
-            left.add_subtotal("Subtotal — Liabilities",
-                              totals.get('total_liabilities', 0))
+            liab_hierarchy = self._build_group_hierarchy(liab_entries)
+            for group_name, group_data in sorted(liab_hierarchy.items()):
+                group_total = sum(float(e.get('net_balance', 0) or 0) for e in group_data["entries"])
+                heading_iid = left.add_group_heading(group_name, group_total, group_data["entries"])
+                left._group_subtotal[heading_iid] = {'name': f"Subtotal — {group_name}", 'amount': group_total}
+            left.add_subtotal("Subtotal — Liabilities", totals.get('total_liabilities', 0))
+
         if capital_entries:
-            left.add_heading("Capital & Equity", capital_entries)
-            for entry in capital_entries:
-                left.add_account(entry)
-            left.add_subtotal("Subtotal — Capital & Equity",
-                              totals.get('total_capital', 0))
-        left.add_total("Total Liabilities & Capital",
-                       totals.get('total_liabilities_capital', 0))
-        left.set_total_text(
-            f"Total Liabilities & Capital: ₹ "
-            f"{totals.get('total_liabilities_capital', 0):,.2f}")
-        left.set_count(len(liab_entries) + len(capital_entries))
+            cap_hierarchy = self._build_group_hierarchy(capital_entries)
+            for group_name, group_data in sorted(cap_hierarchy.items()):
+                group_total = sum(float(e.get('net_balance', 0) or 0) for e in group_data["entries"])
+                heading_iid = left.add_group_heading(group_name, group_total, group_data["entries"])
+                left._group_subtotal[heading_iid] = {'name': f"Subtotal — {group_name}", 'amount': group_total}
+            left.add_subtotal("Subtotal — Capital & Equity", totals.get('total_capital', 0))
+
+        left.add_total("Total Liabilities & Capital", totals.get('total_liabilities_capital', 0))
 
         # ---- RIGHT: Assets ----
         right = self.right_panel
         right.clear()
         asset_entries = sections.get(TYPE_ASSETS, [])
-        if asset_entries:
-            right.add_heading("Assets", asset_entries)
-            for entry in asset_entries:
-                right.add_account(entry)
-            right.add_subtotal("Subtotal — Assets", totals.get('total_assets', 0))
-        right.add_total("Total Assets", totals.get('total_assets', 0))
-        right.set_total_text(f"Total Assets: ₹ {totals.get('total_assets', 0):,.2f}")
-        right.set_count(len(asset_entries))
 
-        # Restore saved selections (drill-down return keeps the same state).
+        if asset_entries:
+            asset_hierarchy = self._build_group_hierarchy(asset_entries)
+            for group_name, group_data in sorted(asset_hierarchy.items()):
+                group_total = sum(float(e.get('net_balance', 0) or 0) for e in group_data["entries"])
+                heading_iid = right.add_group_heading(group_name, group_total, group_data["entries"])
+                right._group_subtotal[heading_iid] = {'name': f"Subtotal — {group_name}", 'amount': group_total}
+            right.add_subtotal("Subtotal — Assets", totals.get('total_assets', 0))
+
+        right.add_total("Total Assets", totals.get('total_assets', 0))
+
+        # Re-focus
         for panel in (left, right):
             index = self._saved_selection.get(self._side_index(panel), 0)
             if panel.rows:
                 panel.select_index(min(index, len(panel.rows) - 1))
         self._current_panel().tree.focus_set()
 
-        # ---- Summary strip + status ----
+        # ---- BOTTOM SUMMARY ----
         total_assets = totals.get('total_assets', 0)
         total_liab_capital = totals.get('total_liabilities_capital', 0)
         difference = round(float(total_assets) - float(total_liab_capital), 2)
         balanced = report.get('is_balanced', False) and abs(difference) < 0.01
 
-        self._summary_values['date'].configure(
-            text=_format_date(as_on))
-        self._summary_values['liab_capital'].configure(
-            text=f"₹ {total_liab_capital:,.2f}")
-        self._summary_values['assets'].configure(
-            text=f"₹ {total_assets:,.2f}")
-        self._summary_values['difference'].configure(
-            text=f"₹ {difference:,.2f}")
+        self._summary_values['date'].configure(text=_format_date(as_on))
+        self._summary_values['liab_capital'].configure(text=f"₹ {_format_indian(total_liab_capital)}")
+        self._summary_values['assets'].configure(text=f"₹ {_format_indian(total_assets)}")
+        self._summary_values['difference'].configure(text=f"₹ {_format_indian(difference)}")
+        
+        status_text = "BALANCED ✓" if balanced else "NOT BALANCED ✗"
+        if not balanced:
+            status_text += f"  (Diff: ₹ {_format_indian(abs(difference))})"
         self.status_chip.configure(
-            text="BALANCED ✓" if balanced else "NOT BALANCED ✗",
+            text=status_text,
             text_color="#FFFFFF",
             fg_color=config.COLOR_INCOME if balanced else config.COLOR_EXPENSE)
 
-        self.status.set(
+        self.status_var.set(
             f"Balance Sheet as of {_format_date(as_on)} — "
-            f"Assets {total_assets:,.2f} = "
-            f"Liab+Capital {total_liab_capital:,.2f} — "
+            f"Assets {_format_indian(total_assets)} = "
+            f"Liab+Capital {_format_indian(total_liab_capital)} — "
             f"{'Balanced' if balanced else 'NOT balanced'}")
 
-    # ------------------------------------------------------------------ #
-    # export
-    # ------------------------------------------------------------------ #
+    def _build_group_hierarchy(self, entries: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        hierarchy = {}
+        for entry in entries:
+            group = entry.get('account_group', '').strip()
+            if not group:
+                group = "Other"
+            if group not in hierarchy:
+                hierarchy[group] = {"entries": []}
+            hierarchy[group]["entries"].append(entry)
+        return hierarchy
+
     def _export_to_png(self) -> None:
         if not self.current_report_data:
             dialogs.warn("Export", "Generate the report first.", parent=self.parent)
