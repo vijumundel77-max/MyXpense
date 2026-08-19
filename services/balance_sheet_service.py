@@ -115,6 +115,32 @@ class BalanceSheetService:
         return TYPE_ASSETS if opening_type == 'Debit' else TYPE_LIABILITIES
 
     @staticmethod
+    def _opening_balance_adjustment(company_id: int) -> float:
+        """Net opening balances (Debit total - Credit total).
+
+        Double-entry requires every opening asset to be funded by an opening
+        liability/capital.  When the books only carry opening balances on the
+        Dr side (no balancing Capital entry), the trial balance is off by
+        exactly this amount.  Adding it as a Credit capital entry makes the
+        balance sheet reconcile without touching the data.
+        """
+        row = db.fetch_one(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN opening_balance_type = 'Debit'
+                                  THEN opening_balance ELSE 0 END), 0) AS debit_total,
+                COALESCE(SUM(CASE WHEN opening_balance_type = 'Credit'
+                                  THEN opening_balance ELSE 0 END), 0) AS credit_total
+            FROM accounts
+            WHERE company_id = ? AND is_active = 1
+            """,
+            (company_id,),
+        )
+        debit_total = float(BalanceSheetService._row_value(row, 'debit_total', 0.0) or 0.0)
+        credit_total = float(BalanceSheetService._row_value(row, 'credit_total', 0.0) or 0.0)
+        return BalanceSheetService._round_amount(debit_total - credit_total)
+
+    @staticmethod
     def generate_balance_sheet(
         company_id: int,
         as_on_date: date,
@@ -177,6 +203,21 @@ class BalanceSheetService:
                     'account_group': 'P&L Summary',
                     'net_balance': BalanceSheetService._round_amount(abs(retained_earnings)),
                     'balance_type': 'Credit' if retained_earnings >= 0 else 'Debit',
+                })
+
+            # Opening balances must be funded by an opening liability/capital
+            # (double entry).  When the books carry only Dr-side opening
+            # balances, add the net as an Opening Capital Adjustment so the
+            # balance sheet reconciles (Assets = Liabilities + Capital).
+            opening_adjustment = BalanceSheetService._opening_balance_adjustment(company_id)
+            if abs(opening_adjustment) >= 0.01:
+                capital_entries.append({
+                    'account_id': None,
+                    'account_name': 'Opening Balance Adjustment',
+                    'account_code': '',
+                    'account_group': 'Capital',
+                    'net_balance': BalanceSheetService._round_amount(abs(opening_adjustment)),
+                    'balance_type': 'Credit' if opening_adjustment >= 0 else 'Debit',
                 })
 
             def section_total(entries: List[Dict[str, Any]], debit_positive: bool) -> float:
