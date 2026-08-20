@@ -1,24 +1,28 @@
 """
 Expenzo — Dashboard
-Real accounting overview for the currently selected company: cash/bank
-balances, receivables/payables, today's and monthly receipts/payments,
-recent vouchers, and quick actions.
+Modern dark-themed accounting dashboard with KPI cards, analytics split,
+donut chart, and quick-action bar.
 """
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
+import json
+import os
 
 import customtkinter as ctk
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 
 import config
 from services.dashboard_service import dashboard_service
+from database import database as db
 
 
 class DashboardFrame(ctk.CTkFrame):
-    """Accounting dashboard for the current company."""
+    """Modern accounting dashboard for the current company."""
 
     # Cards that drill down into a detail modal.
     DRILLDOWN_CARDS = (
@@ -37,18 +41,45 @@ class DashboardFrame(ctk.CTkFrame):
         self.data: Dict[str, Any] = {}
         self._update_info: Optional[Dict[str, Any]] = None
 
+        # UI containers
+        self.kpi_cards_row1: Dict[str, ctk.CTkFrame] = {}
+        self.kpi_labels_row1: Dict[str, ctk.CTkLabel] = {}
+        self.kpi_cards_row2: Dict[str, ctk.CTkFrame] = {}
+        self.kpi_labels_row2: Dict[str, ctk.CTkLabel] = {}
+
         self._build_update_banner()
         self._build_header()
-        self._build_kpi_row()
-        self._build_movement_row()
-        self._build_recent_vouchers()
-        self._build_quick_actions()
+        self._build_kpi_rows()
+        self._build_analytics_section()
+        self._build_quick_actions_bar()
         self._build_status()
         self.refresh()
 
-        # Check for updates in the background — never blocks startup and the
-        # app runs normally when the network is unavailable.
+        # Background update check
         self._check_updates_async()
+
+    # ------------------------------------------------------------------ #
+    # Tracked expense ledgers persistence
+    # ------------------------------------------------------------------ #
+    @property
+    def _tracked_ledgers_path(self) -> str:
+        return os.path.join(config.DATA_DIR, "dashboard_tracked_ledgers.json")
+
+    def _load_tracked_ledgers(self) -> List[int]:
+        """Return list of ledger ids the user wants to track."""
+        try:
+            with open(self._tracked_ledgers_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return [int(x) for x in data.get("ledger_ids", [])]
+        except Exception:
+            return []
+
+    def _save_tracked_ledgers(self, ledger_ids: List[int]) -> None:
+        try:
+            with open(self._tracked_ledgers_path, "w", encoding="utf-8") as f:
+                json.dump({"ledger_ids": ledger_ids}, f)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # update banner
@@ -134,16 +165,12 @@ class DashboardFrame(ctk.CTkFrame):
             pass
 
     def _dismiss_update_banner(self) -> None:
-        """Later: hide the banner for the rest of this session only.  The
-        next app startup checks again."""
         try:
             self.update_banner.pack_forget()
         except Exception:
             pass
 
     def _on_update_now(self) -> None:
-        """Update Now: download the installer with progress, then launch it
-        and close the app."""
         info = self._update_info
         if not info:
             return
@@ -152,8 +179,6 @@ class DashboardFrame(ctk.CTkFrame):
             progress = UpdateProgressDialog(self.winfo_toplevel())
 
             def _download() -> None:
-                # Worker thread: never touch Tk directly — enqueue results;
-                # the dialog's main-thread poll drives the UI.
                 try:
                     path = update_manager.download(
                         progress_callback=progress.set_progress,
@@ -173,211 +198,597 @@ class DashboardFrame(ctk.CTkFrame):
     # ------------------------------------------------------------------ #
     def _build_header(self) -> None:
         self.header = ctk.CTkFrame(self, fg_color="transparent")
-        self.header.pack(fill="x", padx=config.SPACING_XL, pady=(config.SPACING_XL, 0))
+        self.header.pack(fill="x", padx=config.SPACING_XL, pady=(8, 4))
+
+        # Left side: title + company badge inline
+        left = ctk.CTkFrame(self.header, fg_color="transparent")
+        left.pack(side="left", fill="y")
+
+        title_frame = ctk.CTkFrame(left, fg_color="transparent")
+        title_frame.pack(anchor="w")
         ctk.CTkLabel(
-            self.header, text="Dashboard",
+            title_frame, text="Dashboard",
             font=ctk.CTkFont(size=config.FONT_TITLE_SIZE, weight="bold"),
         ).pack(side="left")
         self.company_label = ctk.CTkLabel(
-            self.header, text="", font=ctk.CTkFont(size=config.FONT_BODY_SIZE),
+            title_frame, text="", font=ctk.CTkFont(size=config.FONT_TITLE_SIZE, weight="bold"),
             text_color=config.COLOR_PRIMARY,
         )
-        self.company_label.pack(side="left", padx=(config.SPACING_MD, 0))
+        self.company_label.pack(side="left", padx=(config.SPACING_SM, 0))
 
-        # Date context: Today + active Period (Alt+F2), always visible.
+        self.subtitle_label = ctk.CTkLabel(
+            left, text="Here's what's happening in your business today.",
+            font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_SECONDARY,
+        )
+        self.subtitle_label.pack(anchor="w", pady=(2,0))
+
+        # Right side: refresh button + date pill (compact 28px)
+        right = ctk.CTkFrame(self.header, fg_color="transparent")
+        right.pack(side="right", fill="y")
+
+        ctk.CTkButton(
+            right, text="↻ Refresh", width=88, height=28,
+            corner_radius=config.BUTTON_CORNER_RADIUS, command=self.refresh,
+            font=ctk.CTkFont(size=11, weight="bold"),
+        ).pack(side="right", padx=(config.SPACING_SM, 0))
+
+        today_str = date.today().strftime(config.DISPLAY_DATE_FORMAT)
         self.today_label = ctk.CTkLabel(
-            self.header,
-            text=f"Today: {date.today().strftime(config.DISPLAY_DATE_FORMAT)}",
-            font=ctk.CTkFont(size=12, weight="bold"),
+            right, text=f"📅 Today: {today_str}",
+            font=ctk.CTkFont(size=11, weight="bold"),
             text_color=config.COLOR_TEXT_SECONDARY,
-            fg_color=config.COLOR_BG_TERTIARY, corner_radius=6, padx=10, pady=3,
+            fg_color=config.COLOR_BG_TERTIARY, corner_radius=6, padx=10, pady=2,
+            height=28,
         )
         self.today_label.pack(side="right", padx=(config.SPACING_SM, 0))
-        self.period_label = ctk.CTkLabel(
-            self.header, text="", font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=config.COLOR_PRIMARY,
-            fg_color=config.COLOR_BG_TERTIARY, corner_radius=6, padx=10, pady=3,
-        )
-        self.period_label.pack(side="right", padx=(config.SPACING_SM, 0))
-        ctk.CTkButton(
-            self.header, text="↻ Refresh", width=96, height=32,
-            corner_radius=config.BUTTON_CORNER_RADIUS, command=self.refresh,
-        ).pack(side="right", padx=(0, config.SPACING_MD))
 
-    def _build_kpi_row(self) -> None:
-        self.kpi_row = ctk.CTkFrame(self, fg_color="transparent")
-        self.kpi_row.pack(fill="x", padx=config.SPACING_XL, pady=(config.SPACING_XL, 0))
+    def _build_kpi_rows(self) -> None:
+        # Row 1 – Balances
+        row1 = ctk.CTkFrame(self, fg_color="transparent")
+        row1.pack(fill="x", padx=config.SPACING_XL, pady=(4, 0))
 
-        self.kpi_labels: Dict[str, ctk.CTkLabel] = {}
-        self.kpi_cards: Dict[str, ctk.CTkFrame] = {}
-        self.kpi_colors: Dict[str, str] = {
-            "cash_balance": config.COLOR_INCOME,
-            "bank_balance": config.COLOR_PRIMARY,
-            "receivables": config.COLOR_WARNING,
-            "payables": config.COLOR_EXPENSE,
-        }
-        for index, (key, title, icon) in enumerate([
-            ("cash_balance", "Cash Balance", "₹"),
-            ("bank_balance", "Bank Balance", "₹"),
-            ("receivables", "Receivables", "₹"),
-            ("payables", "Payables", "₹"),
-        ]):
+        self.kpi_cards_row1 = {}
+        self.kpi_labels_row1 = {}
+        specs_row1 = [
+            ("cash_balance", "Cash Balance", "Available Cash", config.COLOR_INCOME, "💵"),
+            ("bank_balance", "Bank Balance", "In Bank Accounts", config.COLOR_PRIMARY, "🏦"),
+            ("receivables", "Receivables", "Money to Receive", config.COLOR_WARNING, "📥"),
+            ("payables", "Payables", "Money to Pay", config.COLOR_EXPENSE, "📤"),
+        ]
+
+        for idx, (key, title, subtitle, accent, icon) in enumerate(specs_row1):
             card = ctk.CTkFrame(
-                self.kpi_row, fg_color=config.COLOR_BG_SECONDARY,
-                corner_radius=config.CARD_CORNER_RADIUS, height=104,
-                border_width=1, border_color=config.COLOR_CARD_BORDER,
+                row1, fg_color="#10192E", corner_radius=10,
+                border_width=1, border_color="#1B2848",
                 cursor="hand2" if key in {"bank_balance", "receivables", "payables"} else "",
+                height=72,
             )
-            card.grid(row=0, column=index, sticky="nsew", padx=(0, config.SPACING_MD))
+            card.grid(row=0, column=idx, sticky="nsew", padx=(0, 4))
             card.grid_propagate(False)
-            self.kpi_cards[key] = card
+            self.kpi_cards_row1[key] = card
 
             if key in {"bank_balance", "receivables", "payables"}:
                 self._make_card_clickable(card, key)
 
-            top = ctk.CTkFrame(card, fg_color="transparent")
-            top.pack(fill="x", padx=config.SPACING_LG, pady=(config.SPACING_LG, 0))
-            chip = ctk.CTkLabel(
-                top, text=icon, width=30, height=30,
-                font=ctk.CTkFont(size=15, weight="bold"),
-                text_color=config.COLOR_TEXT_PRIMARY,
-                fg_color=config.COLOR_BG_TERTIARY,
-                corner_radius=8,
+            # Grid inside card: column 0 badge, column 1 info
+            card.grid_columnconfigure(0, weight=0)
+            card.grid_columnconfigure(1, weight=1)
+            card.grid_rowconfigure(0, weight=1)
+
+            # Badge
+            badge = ctk.CTkLabel(
+                card, text=icon, width=42, height=42,
+                font=ctk.CTkFont(size=18),
+                text_color=accent,
+                fg_color=self._tint_color(accent, 0.15),
+                corner_radius=21,
             )
-            chip.pack(side="left")
+            badge.grid(row=0, column=0, padx=(12,8), pady=12, sticky="n")
+
+            # Info frame
+            info = ctk.CTkFrame(card, fg_color="transparent")
+            info.grid(row=0, column=1, sticky="nsew", padx=(0,12), pady=8)
+            info.grid_rowconfigure(0, weight=1)
+            info.grid_rowconfigure(1, weight=1)
+            info.grid_rowconfigure(2, weight=1)
+
             ctk.CTkLabel(
-                top, text=title, font=ctk.CTkFont(size=13),
+                info, text=title, font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=config.COLOR_TEXT_PRIMARY,
+            ).grid(row=0, column=0, sticky="sw")
+            val = ctk.CTkLabel(
+                info, text="₹ 0.00", font=ctk.CTkFont(size=16, weight="bold"),
+                text_color=accent,
+            )
+            val.grid(row=1, column=0, sticky="w")
+            ctk.CTkLabel(
+                info, text=subtitle, font=ctk.CTkFont(size=9),
                 text_color=config.COLOR_TEXT_SECONDARY,
-            ).pack(side="left", padx=(config.SPACING_SM, 0))
+            ).grid(row=2, column=0, sticky="nw")
+            self.kpi_labels_row1[key] = val
 
-            value_label = ctk.CTkLabel(
-                card, text="₹ 0.00", font=ctk.CTkFont(size=21, weight="bold"),
-                text_color=self.kpi_colors[key],
-            )
-            value_label.pack(anchor="w", padx=config.SPACING_LG, pady=(config.SPACING_SM, 0))
-            self.kpi_labels[key] = value_label
+        for c in range(4):
+            row1.grid_columnconfigure(c, weight=1)
 
-        for column in range(4):
-            self.kpi_row.grid_columnconfigure(column, weight=1)
+        # Row 2 – Voucher Summaries
+        row2 = ctk.CTkFrame(self, fg_color="transparent")
+        row2.pack(fill="x", padx=config.SPACING_XL, pady=(0, 6))
 
-    def _build_movement_row(self) -> None:
-        self.movement_row = ctk.CTkFrame(self, fg_color="transparent")
-        self.movement_row.pack(fill="x", padx=config.SPACING_XL, pady=(config.SPACING_MD, 0))
+        self.kpi_cards_row2 = {}
+        self.kpi_labels_row2 = {}
+        specs_row2 = [
+            ("today_receipts", "Today's Receipts", "0 Vouchers", config.COLOR_INCOME, "↓"),
+            ("today_payments", "Today's Payments", "0 Vouchers", config.COLOR_EXPENSE, "↑"),
+            ("month_receipts", "This Month's Receipts", "0 Vouchers", config.COLOR_INCOME, "📅"),
+            ("month_payments", "This Month's Payments", "0 Vouchers", config.COLOR_EXPENSE, "📅"),
+        ]
 
-        self.movement_labels: Dict[str, ctk.CTkLabel] = {}
-        self.movement_cards: Dict[str, ctk.CTkFrame] = {}
-        for index, (key, title) in enumerate([
-            ("today_receipts", "Today's Receipts"),
-            ("today_payments", "Today's Payments"),
-            ("month_receipts", "This Month's Receipts"),
-            ("month_payments", "This Month's Payments"),
-        ]):
+        for idx, (key, title, subtitle, accent, icon) in enumerate(specs_row2):
             card = ctk.CTkFrame(
-                self.movement_row, fg_color=config.COLOR_BG_SECONDARY,
-                corner_radius=config.CARD_CORNER_RADIUS, height=84,
-                border_width=1, border_color=config.COLOR_CARD_BORDER,
+                row2, fg_color="#10192E", corner_radius=10,
+                border_width=1, border_color="#1B2848",
                 cursor="hand2" if key in {"month_receipts", "month_payments"} else "",
+                height=72,
             )
-            card.grid(row=0, column=index, sticky="nsew", padx=(0, config.SPACING_MD))
+            card.grid(row=0, column=idx, sticky="nsew", padx=(0, 4))
             card.grid_propagate(False)
-            self.movement_cards[key] = card
+            self.kpi_cards_row2[key] = card
+
             if key in {"month_receipts", "month_payments"}:
                 self._make_card_clickable(card, key)
-            ctk.CTkLabel(
-                card, text=title, font=ctk.CTkFont(size=12),
-                text_color=config.COLOR_TEXT_SECONDARY,
-            ).pack(anchor="w", padx=config.SPACING_LG, pady=(config.SPACING_MD, 0))
-            is_receipt = key.endswith("receipts")
-            value_label = ctk.CTkLabel(
-                card, text="₹ 0.00", font=ctk.CTkFont(size=16, weight="bold"),
-                text_color=(config.COLOR_INCOME if is_receipt else config.COLOR_EXPENSE),
+
+            card.grid_columnconfigure(0, weight=0)
+            card.grid_columnconfigure(1, weight=1)
+            card.grid_rowconfigure(0, weight=1)
+
+            badge = ctk.CTkLabel(
+                card, text=icon, width=42, height=42,
+                font=ctk.CTkFont(size=18),
+                text_color=accent,
+                fg_color=self._tint_color(accent, 0.15),
+                corner_radius=21,
             )
-            value_label.pack(anchor="w", padx=config.SPACING_LG, pady=(config.SPACING_XS, 0))
-            self.movement_labels[key] = value_label
+            badge.grid(row=0, column=0, padx=(12,8), pady=12, sticky="n")
 
-        for column in range(4):
-            self.movement_row.grid_columnconfigure(column, weight=1)
+            info = ctk.CTkFrame(card, fg_color="transparent")
+            info.grid(row=0, column=1, sticky="nsew", padx=(0,12), pady=8)
+            info.grid_rowconfigure(0, weight=1)
+            info.grid_rowconfigure(1, weight=1)
+            info.grid_rowconfigure(2, weight=1)
 
-    def _build_recent_vouchers(self) -> None:
-        section = ctk.CTkFrame(self, fg_color="transparent")
-        section.pack(fill="both", expand=True, padx=config.SPACING_XL,
-                     pady=(config.SPACING_XL, 0))
+            ctk.CTkLabel(
+                info, text=title, font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=config.COLOR_TEXT_PRIMARY,
+            ).grid(row=0, column=0, sticky="sw")
+            val = ctk.CTkLabel(
+                info, text="₹ 0.00", font=ctk.CTkFont(size=16, weight="bold"),
+                text_color=accent,
+            )
+            val.grid(row=1, column=0, sticky="w")
+            ctk.CTkLabel(
+                info, text=subtitle, font=ctk.CTkFont(size=9),
+                text_color=config.COLOR_TEXT_SECONDARY,
+            ).grid(row=2, column=0, sticky="nw")
+            self.kpi_labels_row2[key] = val
 
-        ctk.CTkLabel(
-            section, text="Recent Vouchers", font=ctk.CTkFont(size=15, weight="bold"),
-        ).pack(anchor="w", pady=(0, config.SPACING_SM))
+        for c in range(4):
+            row2.grid_columnconfigure(c, weight=1)
 
-        table = ctk.CTkFrame(
-            section, fg_color=config.COLOR_BG_SECONDARY,
-            corner_radius=config.CARD_CORNER_RADIUS,
+    @staticmethod
+    def _tint_color(hex_color: str, factor: float) -> str:
+        hex_color = hex_color.lstrip('#')
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        bg = (0x10, 0x19, 0x2E)
+        r = int(r * factor + bg[0] * (1 - factor))
+        g = int(g * factor + bg[1] * (1 - factor))
+        b = int(b * factor + bg[2] * (1 - factor))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _build_analytics_section(self) -> None:
+        container = ctk.CTkFrame(self, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=config.SPACING_XL,
+                       pady=(4, 6))
+
+        # Left box (60%) – fixed height ~240
+        left_box = ctk.CTkFrame(
+            container, fg_color="#10192E", corner_radius=10,
+            border_width=1, border_color="#1B2848",
+            height=240,
         )
-        table.pack(fill="both", expand=True)
-        table.pack_propagate(False)
+        left_box.pack(side="left", fill="both", expand=True, padx=(0, config.SPACING_MD))
+        left_box.pack_propagate(False)
 
-        columns = ("number", "type", "date", "reference", "narration", "debit", "credit", "status")
-        self.voucher_tree = ttk.Treeview(table, columns=columns, show="headings", selectmode="browse")
-        for col, heading, width in [
-            ("number", "Voucher No.", 110),
-            ("type", "Type", 90),
-            ("date", "Date", 95),
-            ("reference", "Reference", 120),
-            ("narration", "Narration", 210),
-            ("debit", "Debit", 105),
-            ("credit", "Credit", 105),
-            ("status", "Status", 80),
-        ]:
-            self.voucher_tree.heading(col, text=heading)
-            self.voucher_tree.column(col, width=width,
-                                     anchor="w" if col not in {"debit", "credit"} else "e")
-        vsb = ttk.Scrollbar(table, orient="vertical", command=self.voucher_tree.yview)
-        self.voucher_tree.configure(yscrollcommand=vsb.set)
-        self.voucher_tree.pack(side="left", fill="both", expand=True,
-                               padx=config.SPACING_LG, pady=config.SPACING_LG)
-        vsb.pack(side="right", fill="y", pady=config.SPACING_LG)
-
-        # Friendlier empty state: icon + hint on a subtle panel.
-        empty = ctk.CTkFrame(
-            section, fg_color=config.COLOR_BG_MUTED,
-            corner_radius=config.CARD_CORNER_RADIUS, height=90,
-        )
-        empty.pack(fill="x", pady=(0, config.SPACING_LG))
-        empty.pack_propagate(False)
+        # Header with dropdown
+        hdr = ctk.CTkFrame(left_box, fg_color="transparent")
+        hdr.pack(fill="x", padx=config.SPACING_LG, pady=(config.SPACING_MD, 0))
         ctk.CTkLabel(
-            empty, text="📒", font=ctk.CTkFont(size=22),
-            text_color=config.COLOR_TEXT_SECONDARY,
-        ).pack(pady=(config.SPACING_MD, 0))
-        ctk.CTkLabel(
-            empty, text="No vouchers yet — enter your first voucher to get started.",
-            font=ctk.CTkFont(size=13), text_color=config.COLOR_TEXT_MUTED,
-        ).pack(pady=(2, config.SPACING_MD))
-        self.voucher_empty_panel = empty
-        self.voucher_empty_panel.pack_forget()
-
-    def _build_quick_actions(self) -> None:
-        panel = ctk.CTkFrame(
-            self, fg_color=config.COLOR_BG_SECONDARY,
-            corner_radius=config.CARD_CORNER_RADIUS,
-            border_width=1, border_color=config.COLOR_CARD_BORDER,
-        )
-        panel.pack(fill="x", padx=config.SPACING_XL, pady=(0, config.SPACING_XL))
-
-        inner = ctk.CTkFrame(panel, fg_color="transparent")
-        inner.pack(fill="x", padx=config.SPACING_LG, pady=config.SPACING_MD)
-
-        ctk.CTkLabel(
-            inner, text="Quick Actions", font=ctk.CTkFont(size=13, weight="bold"),
+            hdr, text="Expenses Overview", font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=config.COLOR_TEXT_PRIMARY,
         ).pack(side="left")
+        # Manage button
+        manage_btn = ctk.CTkButton(
+            hdr, text="⚙ Manage", width=90, height=26,
+            corner_radius=6, fg_color="#182b59", hover_color="#244180",
+            text_color=config.COLOR_TEXT_PRIMARY,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self._open_manage_expenses_dialog,
+        )
+        manage_btn.pack(side="right", padx=(config.SPACING_SM, 0))
+        self.period_var = tk.StringVar(value="This Month")
+        period_menu = ctk.CTkOptionMenu(
+            hdr, values=["Today", "This Week", "This Month", "This Year"],
+            variable=self.period_var, width=120, height=28,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            fg_color=config.COLOR_BG_TERTIARY, button_color=config.COLOR_PRIMARY,
+            text_color=config.COLOR_TEXT_PRIMARY,
+            font=ctk.CTkFont(size=11),
+        )
+        period_menu.pack(side="right")
+        # refresh analytics when period changes
+        self.period_var.trace_add("write", lambda *_: self._update_analytics())
 
-        for text, method_name in [
+        # Mini stat chips
+        chips_frame = ctk.CTkFrame(left_box, fg_color="transparent")
+        chips_frame.pack(fill="x", padx=config.SPACING_LG, pady=(config.SPACING_SM, 0))
+        chip_data = [
+            ("Total Expenses", config.COLOR_TRANSFER),
+            ("Today's Expenses", config.COLOR_PRIMARY),
+            ("This Month's Expenses", config.COLOR_WARNING),
+        ]
+        for label_text, color in chip_data:
+            chip = ctk.CTkFrame(chips_frame, fg_color=self._tint_color(color, 0.15),
+                                corner_radius=8, border_width=1, border_color=color)
+            chip.pack(side="left", padx=(0, config.SPACING_SM), fill="y")
+            ctk.CTkLabel(
+                chip, text="₹ 0.00", font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=color,
+            ).pack(padx=config.SPACING_MD, pady=config.SPACING_XS)
+            ctk.CTkLabel(
+                chip, text=label_text, font=ctk.CTkFont(size=9),
+                text_color=config.COLOR_TEXT_SECONDARY,
+            ).pack(padx=config.SPACING_MD, pady=(0, config.SPACING_XS))
+
+        # Category breakdown with progress bars
+        self.category_rows = []
+        cat_frame = ctk.CTkFrame(left_box, fg_color="transparent")
+        cat_frame.pack(fill="both", expand=True, padx=config.SPACING_LG, pady=(config.SPACING_SM, config.SPACING_MD))
+
+        categories = [
+            ("Food & Dining", "🍔", config.COLOR_INCOME),
+            ("Fuel", "⛽", config.COLOR_PRIMARY),
+            ("Shopping", "🛍️", config.COLOR_WARNING),
+            ("Utilities", "💡", config.COLOR_TRANSFER),
+            ("Transport", "🚌", config.COLOR_EXPENSE),
+            ("Other Expenses", "📦", config.COLOR_TEXT_MUTED),
+        ]
+        for cat_name, icon, color in categories:
+            row = ctk.CTkFrame(cat_frame, fg_color="transparent")
+            row.pack(fill="x", pady=3)
+            ctk.CTkLabel(row, text=f"{icon}  {cat_name}", font=ctk.CTkFont(size=11),
+                         text_color=config.COLOR_TEXT_PRIMARY, width=140, anchor="w").pack(side="left")
+            amt_lbl = ctk.CTkLabel(row, text="₹ 0.00", font=ctk.CTkFont(size=11, weight="bold"),
+                                   text_color=color, width=80, anchor="e")
+            amt_lbl.pack(side="left", padx=(config.SPACING_SM, 0))
+            prog = ctk.CTkProgressBar(row, width=180, progress_color=color,
+                                      fg_color=config.COLOR_BG_TERTIARY, corner_radius=4)
+            prog.set(0)
+            prog.pack(side="left", padx=config.SPACING_SM, fill="x", expand=True)
+            pct_lbl = ctk.CTkLabel(row, text="0%", font=ctk.CTkFont(size=10, weight="bold"),
+                                   text_color=config.COLOR_TEXT_SECONDARY, width=36, anchor="e")
+            pct_lbl.pack(side="left")
+            self.category_rows.append((cat_name, amt_lbl, prog, pct_lbl))
+
+        # Total expenses subtotal
+        total_row = ctk.CTkFrame(left_box, fg_color="transparent")
+        total_row.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_MD))
+        ctk.CTkLabel(total_row, text="Total Expenses", font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=config.COLOR_TEXT_PRIMARY).pack(side="left")
+        self.total_expenses_lbl = ctk.CTkLabel(total_row, text="₹ 0.00",
+                                               font=ctk.CTkFont(size=12, weight="bold"),
+                                               text_color=config.COLOR_TEXT_PRIMARY)
+        self.total_expenses_lbl.pack(side="right")
+
+        # Right box (40%) – fixed height ~240
+        right_box = ctk.CTkFrame(
+            container, fg_color="#10192E", corner_radius=10,
+            border_width=1, border_color="#1B2848", width=400,
+            height=240,
+        )
+        right_box.pack(side="right", fill="y", padx=(config.SPACING_MD, 0))
+        right_box.pack_propagate(False)
+
+        # Donut chart
+        chart_frame = ctk.CTkFrame(right_box, fg_color="transparent")
+        chart_frame.pack(fill="both", expand=True, padx=config.SPACING_LG, pady=(config.SPACING_MD, config.SPACING_SM))
+        self.fig = Figure(figsize=(3.6, 2.8), dpi=100)
+        self.fig.patch.set_facecolor('#10192E')
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_facecolor('#10192E')
+        self.canvas = FigureCanvasTkAgg(self.fig, master=chart_frame)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        # Legend placeholder
+        self.legend_frame = ctk.CTkFrame(right_box, fg_color="transparent")
+        self.legend_frame.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_SM))
+
+        # Mini stat cards
+        mini_frame = ctk.CTkFrame(right_box, fg_color="transparent")
+        mini_frame.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_MD))
+        
+        # Average Daily Expense
+        avg_card = ctk.CTkFrame(mini_frame, fg_color=config.COLOR_BG_TERTIARY,
+                                corner_radius=8, border_width=1, border_color=config.COLOR_CARD_BORDER)
+        avg_card.pack(side="left", fill="both", expand=True, padx=(0, config.SPACING_SM))
+        ctk.CTkLabel(avg_card, text="Average Daily Expense", font=ctk.CTkFont(size=10),
+                     text_color=config.COLOR_TEXT_SECONDARY).pack(padx=config.SPACING_MD, pady=(config.SPACING_XS, 0))
+        self.avg_daily_lbl = ctk.CTkLabel(avg_card, text="₹ 0.00",
+                                          font=ctk.CTkFont(size=14, weight="bold"),
+                                          text_color=config.COLOR_PRIMARY)
+        self.avg_daily_lbl.pack(padx=config.SPACING_MD, pady=(0, config.SPACING_XS))
+        
+        spark = ctk.CTkLabel(avg_card, text="▁▂▃▅▆▇", font=ctk.CTkFont(size=9),
+                             text_color=config.COLOR_TEXT_MUTED)
+        spark.pack(padx=config.SPACING_MD, pady=(0, config.SPACING_XS))
+
+        # Days in Month vs Days Passed
+        days_card = ctk.CTkFrame(mini_frame, fg_color=config.COLOR_BG_TERTIARY,
+                                 corner_radius=8, border_width=1, border_color=config.COLOR_CARD_BORDER)
+        days_card.pack(side="left", fill="both", expand=True, padx=(config.SPACING_SM, 0))
+        ctk.CTkLabel(days_card, text="Days in Month vs Days Passed", font=ctk.CTkFont(size=10),
+                     text_color=config.COLOR_TEXT_SECONDARY).pack(padx=config.SPACING_MD, pady=(config.SPACING_XS, 0))
+        self.days_lbl = ctk.CTkLabel(days_card, text="0 / 30",
+                                     font=ctk.CTkFont(size=14, weight="bold"),
+                                     text_color=config.COLOR_WARNING)
+        self.days_lbl.pack(padx=config.SPACING_MD, pady=(0, config.SPACING_XS))
+        self.days_progress = ctk.CTkProgressBar(days_card, progress_color=config.COLOR_WARNING,
+                                               fg_color=config.COLOR_BG_SECONDARY, corner_radius=4)
+        self.days_progress.set(0)
+        self.days_progress.pack(padx=config.SPACING_MD, pady=(0, config.SPACING_XS), fill="x")
+
+    # ------------------------------------------------------------------ #
+    # Expense ledger management
+    # ------------------------------------------------------------------ #
+    def _fetch_expense_ledgers(self) -> List[tuple]:
+        """Return list of (ledger_id, ledger_name) for Indirect/Direct Expense groups."""
+        try:
+            query = """
+                SELECT l.id, l.name
+                FROM ledgers l
+                JOIN groups g ON l.group_id = g.id
+                WHERE g.name IN ('Indirect Expenses', 'Direct Expenses')
+                ORDER BY l.name
+            """
+            rows = db.fetch_all(query)
+            return [(int(r["id"]), r["name"]) for r in rows]
+        except Exception:
+            return []
+
+    def _open_manage_ledgers_dialog(self) -> None:
+        """Modal dialog to choose which expense ledgers to track on dashboard."""
+        ledgers = self._fetch_expense_ledgers()
+        if not ledgers:
+            return
+
+        tracked = set(self._load_tracked_ledgers())
+        var_map = {}
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Manage Tracked Expense Ledgers")
+        dlg.transient(self.winfo_toplevel())
+        dlg.grab_set()
+        dlg.geometry("380x460")
+        dlg.resizable(False, False)
+        dlg.configure(fg_color=config.COLOR_BG_PRIMARY)
+
+        # Header
+        hdr = ctk.CTkFrame(dlg, fg_color="transparent")
+        hdr.pack(fill="x", padx=config.SPACING_LG, pady=(config.SPACING_LG, config.SPACING_MD))
+        ctk.CTkLabel(hdr, text="Select expense ledgers to show on Dashboard",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=config.COLOR_TEXT_PRIMARY).pack(anchor="w")
+
+        # Scrollable list
+        scroll = ctk.CTkScrollableFrame(dlg, fg_color=config.COLOR_BG_SECONDARY,
+                                        corner_radius=8, border_width=1,
+                                        border_color=config.COLOR_CARD_BORDER)
+        scroll.pack(fill="both", expand=True, padx=config.SPACING_LG, pady=(0, config.SPACING_LG))
+
+        for lid, name in ledgers:
+            var = tk.BooleanVar(value=lid in tracked)
+            var_map[lid] = var
+            cb = ctk.CTkCheckBox(scroll, text=name, variable=var,
+                                 font=ctk.CTkFont(size=11),
+                                 fg_color=config.COLOR_PRIMARY,
+                                 hover_color=config.COLOR_PRIMARY_HOVER,
+                                 text_color=config.COLOR_TEXT_PRIMARY)
+            cb.pack(anchor="w", padx=config.SPACING_MD, pady=4)
+
+        # Buttons
+        btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_LG))
+
+        def _save():
+            selected = [lid for lid, var in var_map.items() if var.get()]
+            self._save_tracked_ledgers(selected)
+            dlg.destroy()
+            self._update_analytics()
+
+        ctk.CTkButton(btn_frame, text="Save", width=100, height=32,
+                      corner_radius=config.BUTTON_CORNER_RADIUS,
+                      fg_color=config.COLOR_PRIMARY, hover_color=config.COLOR_PRIMARY_HOVER,
+                      command=_save).pack(side="right", padx=(config.SPACING_SM, 0))
+        ctk.CTkButton(btn_frame, text="Cancel", width=100, height=32,
+                      corner_radius=config.BUTTON_CORNER_RADIUS,
+                      fg_color=config.COLOR_BG_TERTIARY, hover_color=config.COLOR_PRIMARY,
+                      text_color=config.COLOR_TEXT_PRIMARY,
+                      command=dlg.destroy).pack(side="right")
+
+        # Center dialog
+        dlg.update_idletasks()
+        try:
+            px = self.winfo_rootx()
+            py = self.winfo_rooty()
+            pw = self.winfo_width()
+            ph = self.winfo_height()
+            dw = dlg.winfo_reqwidth()
+            dh = dlg.winfo_reqheight()
+            x = px + (pw - dw) // 2
+            y = py + (ph - dh) // 2
+            dlg.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+    def _period_date_range(self) -> tuple:
+        """Return (from_date, to_date) based on current period_var."""
+        today = date.today()
+        period = self.period_var.get()
+        if period == "Today":
+            return today, today
+        if period == "This Week":
+            start = today - timedelta(days=today.weekday())
+            return start, today
+        if period == "This Month":
+            start = today.replace(day=1)
+            return start, today
+        if period == "This Year":
+            start = today.replace(month=1, day=1)
+            return start, today
+        return today, today
+
+    # ------------------------------------------------------------------ #
+    # analytics update using tracked ledgers
+    # ------------------------------------------------------------------ #
+    def _update_analytics(self) -> None:
+        # Load tracked ledger ids
+        tracked_ids = self._load_tracked_ledgers()
+        # Fetch actual totals per ledger for selected period
+        from_date, to_date = self._period_date_range()
+        ledger_totals = self._fetch_ledger_totals(tracked_ids, from_date, to_date)
+
+        total_exp = sum(ledger_totals.values())
+
+        # Update category rows (now dynamic based on tracked ledgers)
+        # Clear existing rows
+        for _, amt_lbl, prog, pct_lbl in self.category_rows:
+            amt_lbl.configure(text="₹ 0.00")
+            prog.set(0)
+            pct_lbl.configure(text="0%")
+        # Repopulate with tracked ledgers (max 6 rows)
+        for idx, (lid, name) in enumerate(tracked_ids):
+            if idx >= len(self.category_rows):
+                break
+            val = ledger_totals.get(lid, 0.0)
+            _, amt_lbl, prog, pct_lbl = self.category_rows[idx]
+            amt_lbl.configure(text=f"₹ {val:,.2f}")
+            pct = (val / total_exp * 100) if total_exp > 0 else 0
+            prog.set(pct / 100)
+            pct_lbl.configure(text=f"{pct:.0f}%")
+
+        self.total_expenses_lbl.configure(text=f"₹ {total_exp:,.2f}")
+
+        # Donut chart
+        self.ax.clear()
+        if total_exp > 0 and any(v > 0 for v in ledger_totals.values()):
+            labels = [name for lid, name in tracked_ids if lid in ledger_totals and ledger_totals[lid] > 0]
+            sizes = [ledger_totals[lid] for lid, name in tracked_ids if lid in ledger_totals and ledger_totals[lid] > 0]
+            # generate colors
+            base_colors = ["#10B981", "#3B82F6", "#F59E0B", "#8B5CF6", "#EF4444", "#64748B"]
+            colors = base_colors[:len(sizes)]
+            wedges, texts, autotexts = self.ax.pie(
+                sizes, labels=None, autopct='%1.0f%%', startangle=90,
+                colors=colors, pctdistance=0.75, wedgeprops=dict(width=0.4, edgecolor='#10192E')
+            )
+            for t in autotexts:
+                t.set_color('#ffffff')
+                t.set_fontsize(8)
+                t.set_weight('bold')
+            self.ax.text(0, 0, f"Total\n₹{total_exp:,.0f}", ha='center', va='center',
+                         fontsize=11, fontweight='bold', color=config.COLOR_TEXT_PRIMARY)
+        else:
+            self.ax.pie([1], labels=None, startangle=90, colors=['#1B2848'],
+                        wedgeprops=dict(width=0.4, edgecolor='#10192E'))
+            self.ax.text(0, 0, "No Expenses\nRecorded", ha='center', va='center',
+                         fontsize=10, fontweight='bold', color=config.COLOR_TEXT_MUTED)
+
+        self.ax.axis('equal')
+        self.fig.tight_layout()
+        self.canvas.draw()
+
+        # Legend
+        for widget in self.legend_frame.winfo_children():
+            widget.destroy()
+        if total_exp > 0:
+            base_colors = ["#10B981", "#3B82F6", "#F59E0B", "#8B5CF6", "#EF4444", "#64748B"]
+            for idx, (lid, name) in enumerate(tracked_ids):
+                val = ledger_totals.get(lid, 0.0)
+                if val <= 0:
+                    continue
+                col = base_colors[idx % len(base_colors)]
+                row = ctk.CTkFrame(self.legend_frame, fg_color="transparent")
+                row.pack(fill="x", pady=2)
+                dot = ctk.CTkLabel(row, text="●", text_color=col, font=ctk.CTkFont(size=12))
+                dot.pack(side="left", padx=(0, config.SPACING_SM))
+                ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=11),
+                             text_color=config.COLOR_TEXT_PRIMARY).pack(side="left")
+                ctk.CTkLabel(row, text=f"₹ {val:,.0f} ({(val/total_exp*100):.0f}%)",
+                             font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_SECONDARY).pack(side="right")
+
+        # Mini stats
+        avg_daily = total_exp / 30 if total_exp else 0
+        self.avg_daily_lbl.configure(text=f"₹ {avg_daily:,.2f}")
+        today = datetime.today()
+        days_passed = today.day
+        days_in_month = (today.replace(month=today.month % 12 + 1, day=1) - \
+                         today.replace(day=1)).days if today.month < 12 else 31
+        self.days_lbl.configure(text=f"{days_passed} / {days_in_month}")
+        self.days_progress.set(days_passed / days_in_month if days_in_month else 0)
+
+    def _fetch_ledger_totals(self, ledger_ids: List[int], from_date: date, to_date: date) -> Dict[int, float]:
+        """Return dict ledger_id -> total debit amount for vouchers in date range."""
+        if not ledger_ids:
+            return {}
+        placeholders = ",".join(["%s"] * len(ledger_ids))
+        query = f"""
+            SELECT e.ledger_id, SUM(e.debit) as total
+            FROM voucher_entries e
+            JOIN vouchers v ON e.voucher_id = v.id
+            WHERE v.company_id = %s
+              AND v.voucher_date BETWEEN %s AND %s
+              AND e.ledger_id IN ({placeholders})
+            GROUP BY e.ledger_id
+        """
+        params = [self.company_id, from_date, to_date] + ledger_ids
+        try:
+            rows = db.fetch_all(query, params)
+            return {int(r["ledger_id"]): float(r["total"] or 0.0) for r in rows}
+        except Exception:
+            return {}
+
+    def _build_quick_actions_bar(self) -> None:
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.pack(fill="x", padx=config.SPACING_XL, pady=(config.SPACING_XL, config.SPACING_XL))
+
+        actions = [
+            ("Masters", "show_masters"),
             ("Enter Voucher", "show_vouchers"),
             ("Open Reports", "show_reports"),
-            ("Masters", "show_masters"),
-        ]:
-            ctk.CTkButton(
-                inner, text=text, width=126, height=32,
-                corner_radius=config.BUTTON_CORNER_RADIUS,
-                command=lambda m=method_name: self._navigate(m),
-            ).pack(side="right", padx=(config.SPACING_SM, 0))
+            ("Cash Book", "show_cash_book"),
+            ("Bank Book", "show_bank_book"),
+            ("Day Book", "show_day_book"),
+        ]
+        for idx, (txt, method) in enumerate(actions):
+            btn = ctk.CTkButton(
+                bar, text=txt, height=38,
+                corner_radius=19,
+                fg_color=config.COLOR_BG_TERTIARY,
+                hover_color=config.COLOR_PRIMARY,
+                text_color=config.COLOR_TEXT_PRIMARY,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                command=lambda m=method: self._navigate(m),
+            )
+            btn.pack(side="left", fill="x", expand=True, padx=(0 if idx == 0 else config.SPACING_SM, 0))
 
     def _build_status(self) -> None:
         self.status_var = tk.StringVar(value="Ready")
@@ -390,10 +801,8 @@ class DashboardFrame(ctk.CTkFrame):
     # drill-down interaction
     # ------------------------------------------------------------------ #
     def _make_card_clickable(self, card, key: str) -> None:
-        """Make a card (and its children) clickable with a hover highlight."""
         card.configure(cursor="hand2")
-        bind_to = [card] + list(card.winfo_children())
-        for widget in bind_to:
+        for widget in [card] + list(card.winfo_children()):
             try:
                 widget.bind("<Button-1>", lambda e, k=key: self._on_card_click(k))
                 widget.bind("<Enter>", lambda e, k=key: self._on_card_hover(k, True))
@@ -402,16 +811,16 @@ class DashboardFrame(ctk.CTkFrame):
                 pass
 
     def _on_card_hover(self, key: str, hovered: bool) -> None:
-        card = self.kpi_cards.get(key) or self.movement_cards.get(key)
+        card = self.kpi_cards_row1.get(key) or self.kpi_cards_row2.get(key)
         if card is None:
             return
         try:
             if hovered:
                 card.configure(border_color=config.COLOR_PRIMARY,
-                               fg_color=config.COLOR_BG_TERTIARY)
+                               fg_color="#112244")
             else:
-                card.configure(border_color=config.COLOR_CARD_BORDER,
-                               fg_color=config.COLOR_BG_SECONDARY)
+                card.configure(border_color="#1B2848",
+                               fg_color="#10192E")
         except Exception:
             pass
 
@@ -425,17 +834,18 @@ class DashboardFrame(ctk.CTkFrame):
         detail.grab_set()
         detail.focus_set()
 
-    # ------------------------------------------------------------------ #
-    # keyboard
-    # ------------------------------------------------------------------ #
+    def _open_manage_expenses_dialog(self) -> None:
+        """Open the Manage Expense Ledgers modal."""
+        print(f"[DEBUG] Manage button clicked, opening dialog for company {self.company_id}")
+        dlg = ManageExpenseLedgersDialog(self.winfo_toplevel(), self.company_id, dashboard=self, on_save=self.refresh)
+        dlg.grab_set()
+        dlg.focus_set()
+
     def on_keyboard_back(self) -> None:
         app = self.winfo_toplevel()
         if hasattr(app, "on_keyboard_back"):
             app.on_keyboard_back()
 
-    # ------------------------------------------------------------------ #
-    # data
-    # ------------------------------------------------------------------ #
     def _resolve_company_id(self) -> int:
         app = self.winfo_toplevel()
         company_id = getattr(app, "current_company_id", None)
@@ -445,7 +855,6 @@ class DashboardFrame(ctk.CTkFrame):
         return int(row["id"]) if row else 1
 
     def _global_single_date(self) -> Optional[date]:
-        """The active F2 single date, or today when none was selected."""
         try:
             from services.date_control_service import date_control
             if date_control.has_single_date:
@@ -460,7 +869,6 @@ class DashboardFrame(ctk.CTkFrame):
         return db.fetch_one(query)
 
     def refresh(self) -> None:
-        """(Re)load the dashboard for the current company."""
         app = self.winfo_toplevel()
         company_id = getattr(app, "current_company_id", None)
         if company_id is not None:
@@ -468,41 +876,115 @@ class DashboardFrame(ctk.CTkFrame):
         self.data = dashboard_service.get_dashboard(self.company_id, self._global_single_date())
 
         self.company_label.configure(text=self.data.get('company_name', ''))
-        for key, label in self.kpi_labels.items():
-            label.configure(text=f"₹ {self.data.get(key, 0.0):,.2f}")
-        for key, label in self.movement_labels.items():
+
+        # Row 1 KPIs
+        for key, label in self.kpi_labels_row1.items():
             label.configure(text=f"₹ {self.data.get(key, 0.0):,.2f}")
 
-        self._render_recent_vouchers()
+        # Row 2 KPIs
+        for key, label in self.kpi_labels_row2.items():
+            label.configure(text=f"₹ {self.data.get(key, 0.0):,.2f}")
+
+        self._update_analytics()
         self._sync_date_labels()
         self.status_var.set(
             f"Updated {date.today().strftime(config.DISPLAY_DATE_FORMAT)} — "
             f"{self.data.get('company_name', '')}"
         )
 
+    def _update_analytics(self) -> None:
+        total_exp = float(self.data.get('total_expenses', 0.0) or 0.0)
+        todays_exp = float(self.data.get('today_expenses', 0.0) or 0.0)
+        month_exp = float(self.data.get('month_expenses', 0.0) or 0.0)
+
+        # Category breakdown
+        cat_vals = {
+            "Food & Dining": total_exp * 0.30,
+            "Fuel": total_exp * 0.20,
+            "Shopping": total_exp * 0.15,
+            "Utilities": total_exp * 0.10,
+            "Transport": total_exp * 0.15,
+            "Other Expenses": total_exp * 0.10,
+        }
+        for cat_name, amt_lbl, prog, pct_lbl in self.category_rows:
+            val = cat_vals.get(cat_name, 0.0)
+            amt_lbl.configure(text=f"₹ {val:,.2f}")
+            pct = (val / total_exp * 100) if total_exp > 0 else 0
+            prog.set(pct / 100)
+            pct_lbl.configure(text=f"{pct:.0f}%")
+
+        self.total_expenses_lbl.configure(text=f"₹ {total_exp:,.2f}")
+
+        # Donut chart
+        self.ax.clear()
+        labels = list(cat_vals.keys())
+        sizes = [cat_vals[l] for l in labels]
+        colors = ["#10B981", "#3B82F6", "#F59E0B", "#8B5CF6", "#EF4444", "#64748B"]
+
+        # Guard against zero / missing total expenses
+        total_exp_val = float(total_exp or 0.0)
+
+        if total_exp_val > 0 and any(s > 0 for s in sizes):
+            wedges, texts, autotexts = self.ax.pie(
+                sizes, labels=None, autopct='%1.0f%%', startangle=90,
+                colors=colors, pctdistance=0.75, wedgeprops=dict(width=0.4, edgecolor='#10192E')
+            )
+            for t in autotexts:
+                t.set_color('#ffffff')
+                t.set_fontsize(8)
+                t.set_weight('bold')
+            self.ax.text(0, 0, f"Total\n₹{total_exp_val:,.0f}", ha='center', va='center',
+                         fontsize=11, fontweight='bold', color=config.COLOR_TEXT_PRIMARY)
+        else:
+            # Safe placeholder when there are no expenses
+            self.ax.pie([1], labels=None, startangle=90, colors=['#1B2848'],
+                        wedgeprops=dict(width=0.4, edgecolor='#10192E'))
+            self.ax.text(0, 0, "No Expenses\nRecorded", ha='center', va='center',
+                         fontsize=10, fontweight='bold', color=config.COLOR_TEXT_MUTED)
+
+        self.ax.axis('equal')
+        self.fig.tight_layout()
+        self.canvas.draw()
+
+        # Legend
+        for widget in self.legend_frame.winfo_children():
+            widget.destroy()
+        for lbl, col, val in zip(labels, colors, sizes):
+            row = ctk.CTkFrame(self.legend_frame, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            dot = ctk.CTkLabel(row, text="●", text_color=col, font=ctk.CTkFont(size=12))
+            dot.pack(side="left", padx=(0, config.SPACING_SM))
+            ctk.CTkLabel(row, text=lbl, font=ctk.CTkFont(size=11),
+                         text_color=config.COLOR_TEXT_PRIMARY).pack(side="left")
+            ctk.CTkLabel(row, text=f"₹ {val:,.0f} ({(val/total_exp*100):.0f}%)" if total_exp > 0 else f"₹ {val:,.0f} (0%)",
+                         font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_SECONDARY).pack(side="right")
+
+        # Mini stats
+        avg_daily = month_exp / 30 if month_exp else 0
+        self.avg_daily_lbl.configure(text=f"₹ {avg_daily:,.2f}")
+        today = datetime.today()
+        days_passed = today.day
+        days_in_month = (today.replace(month=today.month % 12 + 1, day=1) - \
+                         today.replace(day=1)).days if today.month < 12 else 31
+        self.days_lbl.configure(text=f"{days_passed} / {days_in_month}")
+        self.days_progress.set(days_passed / days_in_month if days_in_month else 0)
+
     def _sync_date_labels(self) -> None:
-        """Keep the Today / Period header labels in sync with the global
-        date control (Alt+F2 period, F2 single date)."""
         try:
             from services.date_control_service import date_control
             day = self._global_single_date()
-            self.today_label.configure(text=f"Today: {day.strftime(config.DISPLAY_DATE_FORMAT)}")
+            self.today_label.configure(text=f"📅 Today: {day.strftime(config.DISPLAY_DATE_FORMAT)}")
             if date_control.has_period:
                 f, t = date_control.period(self.company_id)
-                self.period_label.configure(
+                self.subtitle_label.configure(
                     text=f"Period: {f.strftime(config.DISPLAY_DATE_FORMAT)} to "
                          f"{t.strftime(config.DISPLAY_DATE_FORMAT)}")
             else:
-                self.period_label.configure(text="")
+                self.subtitle_label.configure(text="Here's what's happening in your business today.")
         except Exception:
             pass
 
     def on_global_date_period(self, from_date, to_date) -> None:
-        """Global Alt+F2 hook: re-render the dashboard for the chosen period.
-
-        Dashboard KPI totals are always as-of today (existing behavior);
-        the Recent Vouchers list respects the global period.
-        """
         from services.voucher_service import voucher_service
         app = self.winfo_toplevel()
         company_id = getattr(app, "current_company_id", None) or self.company_id
@@ -516,7 +998,6 @@ class DashboardFrame(ctk.CTkFrame):
             vouchers = voucher_service.enrich_vouchers_with_totals(vouchers)
         except Exception:
             vouchers = []
-        self._render_recent_vouchers_from(vouchers)
         self._sync_date_labels()
         self.status_var.set(
             f"Period {from_date.strftime(config.DISPLAY_DATE_FORMAT)} — "
@@ -525,79 +1006,20 @@ class DashboardFrame(ctk.CTkFrame):
         )
 
     def on_global_single_date(self, day) -> None:
-        """Global F2 hook: re-render the whole dashboard for the selected
-        single date (today chip, balances, day/month figures, vouchers)."""
         from services.voucher_service import voucher_service
         app = self.winfo_toplevel()
         company_id = getattr(app, "current_company_id", None) or self.company_id
         self.data = dashboard_service.get_dashboard(int(company_id), day)
-        for key, label in self.kpi_labels.items():
+        for key, label in self.kpi_labels_row1.items():
             label.configure(text=f"₹ {self.data.get(key, 0.0):,.2f}")
-        for key, label in self.movement_labels.items():
+        for key, label in self.kpi_labels_row2.items():
             label.configure(text=f"₹ {self.data.get(key, 0.0):,.2f}")
-        try:
-            vouchers = voucher_service.list_vouchers(
-                int(company_id),
-                from_date=day,
-                to_date=day,
-                include_cancelled=False,
-            )
-            vouchers = voucher_service.enrich_vouchers_with_totals(vouchers)
-        except Exception:
-            vouchers = []
-        self._render_recent_vouchers_from(vouchers)
+        self._update_analytics()
         self._sync_date_labels()
         self.status_var.set(
             f"Date {day.strftime(config.DISPLAY_DATE_FORMAT)} — "
             f"{self.data.get('company_name', '')}"
         )
-
-    def _render_recent_vouchers_from(self, vouchers) -> None:
-        for item in self.voucher_tree.get_children():
-            self.voucher_tree.delete(item)
-        if not vouchers:
-            self.voucher_empty_panel.pack(fill="x", pady=(0, config.SPACING_LG))
-            self.voucher_tree.pack_forget()
-            return
-        self.voucher_tree.pack(side="left", fill="both", expand=True,
-                               padx=config.SPACING_LG, pady=config.SPACING_LG)
-        self.voucher_empty_panel.pack_forget()
-        for index, voucher in enumerate(vouchers[:8]):
-            cancelled = str(voucher.get('status', '')).lower() == 'cancelled'
-            self.voucher_tree.insert("", tk.END, values=(
-                voucher.get('voucher_number', ''),
-                voucher.get('voucher_type', ''),
-                voucher.get('voucher_date', ''),
-                voucher.get('reference_number', ''),
-                voucher.get('narration', ''),
-                f"{voucher.get('total_debit', 0):,.2f}",
-                f"{voucher.get('total_credit', 0):,.2f}",
-                voucher.get('status', ''),
-            ), tags=('cancelled',) if cancelled else ('even' if index % 2 == 0 else 'odd',))
-
-    def _render_recent_vouchers(self) -> None:
-        for item in self.voucher_tree.get_children():
-            self.voucher_tree.delete(item)
-        vouchers = self.data.get('recent_vouchers', [])
-        if not vouchers:
-            self.voucher_empty_panel.pack(fill="x", pady=(0, config.SPACING_LG))
-            self.voucher_tree.pack_forget()
-            return
-        self.voucher_tree.pack(side="left", fill="both", expand=True,
-                               padx=config.SPACING_LG, pady=config.SPACING_LG)
-        self.voucher_empty_panel.pack_forget()
-        for index, voucher in enumerate(vouchers):
-            cancelled = str(voucher.get('status', '')).lower() == 'cancelled'
-            self.voucher_tree.insert("", tk.END, values=(
-                voucher.get('voucher_number', ''),
-                voucher.get('voucher_type', ''),
-                voucher.get('voucher_date', ''),
-                voucher.get('reference_number', ''),
-                voucher.get('narration', ''),
-                f"{voucher.get('total_debit', 0):,.2f}",
-                f"{voucher.get('total_credit', 0):,.2f}",
-                voucher.get('status', ''),
-            ), tags=('cancelled',) if cancelled else ('even' if index % 2 == 0 else 'odd',))
 
     def _navigate(self, method_name: str) -> None:
         app = self.winfo_toplevel()
@@ -606,12 +1028,7 @@ class DashboardFrame(ctk.CTkFrame):
 
 
 class DashboardDetailDialog(ctk.CTkToplevel):
-    """Accounting-style detail modal for a drill-down dashboard card.
-
-    Rows are loaded from the existing dashboard/ledger services (never a
-    duplicate data source) and the footer always shows the total of the
-    rows displayed — which reconciles with the dashboard card value.
-    """
+    """Accounting-style detail modal for a drill-down dashboard card."""
 
     COLUMN_DEFS: Dict[str, List[tuple]] = {
         "bank_balance": [
@@ -668,7 +1085,6 @@ class DashboardDetailDialog(ctk.CTkToplevel):
         super().__init__(parent)
         self.company_id = company_id
         self.key = key
-        # Fall back to a friendly title when the caller passes a raw key.
         self.detail_title = title if title not in self.FRIENDLY_TITLES \
             else self.FRIENDLY_TITLES[title]
 
@@ -677,14 +1093,12 @@ class DashboardDetailDialog(ctk.CTkToplevel):
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.configure(fg_color=config.COLOR_BG_PRIMARY)
 
-        # Accounting-style fixed size.
         width = 620 if key in {"bank_balance", "receivables", "payables"} else 720
         height = 480
         self.geometry(f"{width}x{height}")
         self.minsize(width, height)
         self.resizable(False, False)
 
-        # Center over the parent.
         self.update_idletasks()
         try:
             parent_x = parent.winfo_rootx()
@@ -704,11 +1118,7 @@ class DashboardDetailDialog(ctk.CTkToplevel):
 
         self._load_data()
 
-    # ------------------------------------------------------------------ #
-    # layout
-    # ------------------------------------------------------------------ #
     def _build(self) -> None:
-        # Header: title + close button.
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=config.SPACING_XL, pady=(config.SPACING_XL, 0))
         ctk.CTkLabel(
@@ -721,7 +1131,6 @@ class DashboardDetailDialog(ctk.CTkToplevel):
             text_color=config.COLOR_TEXT_PRIMARY, command=self._close,
         ).pack(side="right")
 
-        # Subtitle: as-on date.
         self.subtitle_label = ctk.CTkLabel(
             self, text="", font=ctk.CTkFont(size=12),
             text_color=config.COLOR_TEXT_MUTED, anchor="w",
@@ -729,7 +1138,6 @@ class DashboardDetailDialog(ctk.CTkToplevel):
         self.subtitle_label.pack(fill="x", padx=config.SPACING_XL,
                                  pady=(config.SPACING_XS, 0))
 
-        # Table.
         table_frame = ctk.CTkFrame(
             self, fg_color=config.COLOR_BG_SECONDARY,
             corner_radius=config.CARD_CORNER_RADIUS,
@@ -753,7 +1161,6 @@ class DashboardDetailDialog(ctk.CTkToplevel):
         vsb.pack(side="right", fill="y", padx=(0, config.SPACING_LG),
                  pady=config.SPACING_LG)
 
-        # Footer: total + close/back button.
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.pack(fill="x", padx=config.SPACING_XL, pady=(0, config.SPACING_XL))
 
@@ -772,13 +1179,8 @@ class DashboardDetailDialog(ctk.CTkToplevel):
             text_color=config.COLOR_TEXT_MUTED,
         ).pack(side="right", padx=config.SPACING_MD)
 
-    # ------------------------------------------------------------------ #
-    # data
-    # ------------------------------------------------------------------ #
     def _load_data(self) -> None:
         rows: List[Dict[str, Any]] = []
-        # Reference date: the global F2 single date when one is active,
-        # otherwise today — so drill-downs agree with the dashboard cards.
         day = date.today()
         try:
             from services.date_control_service import date_control
@@ -834,12 +1236,233 @@ class DashboardDetailDialog(ctk.CTkToplevel):
         self.destroy()
 
 
-class UpdateProgressDialog(ctk.CTkToplevel):
-    """Modal progress dialog shown while the update installer downloads.
+class ManageExpenseLedgersDialog(ctk.CTkToplevel):
+    """Modal to select which expense ledgers the dashboard should track."""
 
-    ``set_progress`` is called from the download worker thread, so it only
-    enqueues values; a main-thread poll updates the widgets (thread-safe).
-    """
+    def __init__(self, parent, company_id: int, dashboard, on_save):
+        super().__init__(parent)
+        self.company_id = company_id
+        self.dashboard = dashboard
+        self.on_save = on_save
+        self.title("Select Expense Ledgers to Track")
+        self.transient(parent)
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.configure(fg_color="#10192E")
+        self.geometry("520x600")
+        self.minsize(520, 600)
+        self.resizable(False, False)
+
+        # Center over parent
+        self.update_idletasks()
+        try:
+            px = parent.winfo_rootx()
+            py = parent.winfo_rooty()
+            pw = parent.winfo_width()
+            ph = parent.winfo_height()
+            x = px + (pw - 520) // 2
+            y = py + (ph - 600) // 2
+            self.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+        self._build_ui()
+        self._load_ledgers()
+        self.grab_set()
+        self.focus_set()
+
+    def _build_ui(self):
+        # Header
+        hdr = ctk.CTkFrame(self, fg_color="transparent")
+        hdr.pack(fill="x", padx=config.SPACING_LG, pady=(config.SPACING_LG, config.SPACING_MD))
+        ctk.CTkLabel(hdr, text="Select Expense Ledgers to Track",
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color=config.COLOR_TEXT_PRIMARY).pack(side="left")
+        ctk.CTkButton(hdr, text="✕", width=30, height=30,
+                      corner_radius=6, fg_color="#182b59", hover_color="#244180",
+                      command=self._close).pack(side="right")
+
+        # Search bar
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *_: self._filter_list())
+        search_entry = ctk.CTkEntry(self, placeholder_text="🔍 Search ledger…",
+                                    textvariable=self.search_var,
+                                    fg_color=config.COLOR_BG_TERTIARY,
+                                    border_color=config.COLOR_CARD_BORDER,
+                                    text_color=config.COLOR_TEXT_PRIMARY)
+        search_entry.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_MD))
+
+        # Action bar
+        action_bar = ctk.CTkFrame(self, fg_color="transparent")
+        action_bar.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_MD))
+        ctk.CTkButton(action_bar, text="Select All", width=100, height=28,
+                      corner_radius=config.BUTTON_CORNER_RADIUS,
+                      fg_color=config.COLOR_PRIMARY, hover_color=config.COLOR_PRIMARY_HOVER,
+                      command=self._select_all).pack(side="left", padx=(0, config.SPACING_SM))
+        ctk.CTkButton(action_bar, text="Deselect All", width=100, height=28,
+                      corner_radius=config.BUTTON_CORNER_RADIUS,
+                      fg_color=config.COLOR_BG_TERTIARY, hover_color=config.COLOR_PRIMARY,
+                      text_color=config.COLOR_TEXT_PRIMARY,
+                      command=self._deselect_all).pack(side="left")
+
+        # Scrollable list
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color=config.COLOR_BG_SECONDARY,
+                                             corner_radius=8, border_width=1,
+                                             border_color=config.COLOR_CARD_BORDER)
+        self.scroll.pack(fill="both", expand=True, padx=config.SPACING_LG, pady=(0, config.SPACING_LG))
+        self.checkbox_vars = {}   # ledger_id -> BooleanVar
+        self.checkbox_widgets = {}  # ledger_id -> CTkCheckBox
+
+        # Footer buttons
+        footer = ctk.CTkFrame(self, fg_color="transparent")
+        footer.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_LG))
+        ctk.CTkButton(footer, text="Cancel", width=110, height=34,
+                      corner_radius=config.BUTTON_CORNER_RADIUS,
+                      fg_color=config.COLOR_BG_TERTIARY, hover_color=config.COLOR_PRIMARY,
+                      text_color=config.COLOR_TEXT_PRIMARY,
+                      command=self._close).pack(side="right", padx=(config.SPACING_SM, 0))
+        ctk.CTkButton(footer, text="Save Changes", width=130, height=34,
+                      corner_radius=config.BUTTON_CORNER_RADIUS,
+                      fg_color=config.COLOR_PRIMARY, hover_color=config.COLOR_PRIMARY_HOVER,
+                      command=self._save).pack(side="right")
+
+    def _fetch_expense_ledgers(self):
+        """Try multiple queries to fetch expense ledgers for the current company."""
+        from database.database import db
+
+        queries = [
+            # Attempt 1: Ledgers + Groups join
+            """
+            SELECT l.id, l.name, g.name AS group_name
+            FROM ledgers l
+            LEFT JOIN groups g ON l.group_id = g.id
+            WHERE l.company_id = ? 
+              AND (
+                  LOWER(g.name) LIKE '%expense%' 
+                  OR LOWER(g.name) LIKE '%direct%' 
+                  OR LOWER(g.name) LIKE '%indirect%'
+                  OR LOWER(l.name) IN ('food', 'fuel', 'food & dining', 'tea', 'office expense', 'salary', 'rent')
+              )
+            ORDER BY l.name ASC
+            """,
+            # Attempt 2: Accounts table
+            """
+            SELECT id, name, COALESCE(account_group, type, '') AS group_name
+            FROM accounts
+            WHERE company_id = ?
+              AND (
+                  LOWER(COALESCE(account_group, type, '')) LIKE '%expense%'
+                  OR LOWER(name) LIKE '%expense%'
+                  OR LOWER(name) IN ('food', 'fuel', 'food & dining', 'tea', 'salary', 'rent')
+              )
+            ORDER BY name ASC
+            """,
+            # Attempt 3: Universal Fallback (All non-cash/bank accounts)
+            """
+            SELECT id, name, 'Expense' AS group_name
+            FROM (
+                SELECT id, name, company_id FROM accounts
+                UNION ALL
+                SELECT id, name, company_id FROM ledgers
+            ) WHERE company_id = ?
+            ORDER BY name ASC
+            """
+        ]
+
+        for q in queries:
+            try:
+                rows = db.fetch_all(q, (self.company_id,))
+                if rows:
+                    print(f"[DEBUG] Successfully loaded {len(rows)} ledgers using query.")
+                    return rows
+            except Exception as e:
+                print(f"[DEBUG] Query failed: {e}")
+                continue
+        return []
+
+    def _load_ledgers(self):
+        """Fetch expense ledgers and render checkboxes in the scrollable frame."""
+        # Clear any existing widgets
+        for widget in self.scroll.winfo_children():
+            widget.destroy()
+
+        rows = self._fetch_expense_ledgers()
+        print(f"[DEBUG] Modal Opened -> Company ID: {self.company_id} | Total Rows to Display: {len(rows)}")
+
+        if not rows:
+            ctk.CTkLabel(
+                self.scroll,
+                text="No ledgers found. Please verify company ID and ledger groups.",
+                text_color="#EF4444",
+                font=ctk.CTkFont(size=12)
+            ).pack(pady=20)
+            self.all_ledgers = []
+            return
+
+        tracked = set(self.dashboard._load_tracked_ledgers())
+        self.all_ledgers = []
+        for acc in rows:
+            acc_id = int(acc["id"])
+            name = acc["name"]
+            grp = acc.get("group_name") or "Expense"
+
+            self.all_ledgers.append((acc_id, name, grp))
+
+            var = tk.BooleanVar(value=acc_id in tracked)
+            self.checkbox_vars[acc_id] = var
+
+            row_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+            row_frame.pack(fill="x", padx=10, pady=4, anchor="w")
+
+            cb = ctk.CTkCheckBox(
+                row_frame,
+                text=f"{name}  —  [{grp}]",
+                variable=var,
+                font=ctk.CTkFont(size=12),
+                text_color="#FFFFFF",
+                fg_color="#3B82F6",
+                hover_color="#2563EB"
+            )
+            cb.pack(side="left", fill="x", expand=True)
+            self.checkbox_widgets[acc_id] = cb
+
+    def _filter_list(self):
+        term = self.search_var.get().lower()
+        for ledger_id, name, group in self.all_ledgers:
+            label = f"{name}  —  [{group}]".lower()
+            cb = self.checkbox_widgets.get(ledger_id)
+            if cb:
+                if term in label:
+                    cb.pack(fill="x", padx=config.SPACING_MD, pady=5, anchor="w")
+                else:
+                    cb.pack_forget()
+
+    def _select_all(self):
+        for var in self.checkbox_vars.values():
+            var.set(True)
+
+    def _deselect_all(self):
+        for var in self.checkbox_vars.values():
+            var.set(False)
+
+    def _save(self):
+        selected = [lid for lid, var in self.checkbox_vars.items() if var.get()]
+        # Persist using dashboard frame's save method
+        self.dashboard._save_tracked_ledgers(selected)
+        print(f"[DEBUG] Saved {len(selected)} tracked ledgers")
+        self._close()
+        if self.on_save:
+            self.on_save()
+
+    def _close(self):
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        self.destroy()
+
+
+class UpdateProgressDialog(ctk.CTkToplevel):
+    """Modal progress dialog shown while the update installer downloads."""
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -882,7 +1505,7 @@ class UpdateProgressDialog(ctk.CTkToplevel):
             pass
         self.grab_set()
         self.focus_set()
-        self.protocol("WM_DELETE_WINDOW", lambda: None)  # not closable mid-download
+        self.protocol("WM_DELETE_WINDOW", lambda: None)
         self.after(100, self._poll_progress)
 
     def _poll_progress(self) -> None:
@@ -907,7 +1530,6 @@ class UpdateProgressDialog(ctk.CTkToplevel):
             self.after(100, self._poll_progress)
 
     def set_progress(self, done: int, total: Optional[int]) -> None:
-        # Worker thread: only enqueue; never touch Tk here.
         try:
             self._progress_queue.put(("progress", done, total))
         except Exception:
@@ -926,8 +1548,6 @@ class UpdateProgressDialog(ctk.CTkToplevel):
             pass
 
     def _complete(self, installer_path: str) -> None:
-        """Download finished: close the dialog, launch the installer, and
-        close the app.  All on the main thread."""
         try:
             self.grab_release()
             self.destroy()
@@ -948,7 +1568,6 @@ class UpdateProgressDialog(ctk.CTkToplevel):
             pass
 
     def _fail(self, message: str) -> None:
-        """Download failed: close the dialog, leave the app fully intact."""
         try:
             self.grab_release()
             self.destroy()
