@@ -137,28 +137,28 @@ class DashboardFrame(ctk.CTkFrame):
 
             ctk.CTkLabel(
                 inner, text="⚠", font=ctk.CTkFont(size=16, weight="bold"),
-                text_color="#FFFFFF",
+                text_color=config.COLOR_TEXT_PRIMARY,
             ).pack(side="left")
             ctk.CTkLabel(
                 inner,
                 text=f"New version available — Expenzo v{version}",
                 font=ctk.CTkFont(size=13, weight="bold"),
-                text_color="#FFFFFF",
+                text_color=config.COLOR_TEXT_PRIMARY,
             ).pack(side="left", padx=(config.SPACING_SM, 0))
 
             ctk.CTkButton(
                 inner, text="Later", width=80, height=28,
                 corner_radius=config.BUTTON_CORNER_RADIUS,
                 fg_color="transparent", border_width=1,
-                border_color="#FFFFFF", text_color="#FFFFFF",
+                border_color=config.COLOR_TEXT_PRIMARY, text_color=config.COLOR_TEXT_PRIMARY,
                 hover_color=config.COLOR_EXPENSE_HOVER,
                 command=self._dismiss_update_banner,
             ).pack(side="right")
             ctk.CTkButton(
                 inner, text="Update Now", width=110, height=28,
                 corner_radius=config.BUTTON_CORNER_RADIUS,
-                fg_color="#FFFFFF", text_color=config.COLOR_EXPENSE,
-                hover_color="#F3F4F6",
+                fg_color=config.COLOR_TEXT_PRIMARY, text_color=config.COLOR_BG_PRIMARY,
+                hover_color=config.COLOR_BG_TERTIARY,
                 command=self._on_update_now,
             ).pack(side="right", padx=(0, config.SPACING_SM))
         except Exception:
@@ -249,6 +249,7 @@ class DashboardFrame(ctk.CTkFrame):
 
         self.kpi_cards_row1 = {}
         self.kpi_labels_row1 = {}
+        self.kpi_badges_row1 = {}
         specs_row1 = [
             ("cash_balance", "Cash Balance", "Available Cash", config.COLOR_INCOME, "💵"),
             ("bank_balance", "Bank Balance", "In Bank Accounts", config.COLOR_PRIMARY, "🏦"),
@@ -258,8 +259,8 @@ class DashboardFrame(ctk.CTkFrame):
 
         for idx, (key, title, subtitle, accent, icon) in enumerate(specs_row1):
             card = ctk.CTkFrame(
-                row1, fg_color="#10192E", corner_radius=10,
-                border_width=1, border_color="#1B2848",
+                row1, fg_color=config.COLOR_BG_SECONDARY, corner_radius=10,
+                border_width=1, border_color=config.COLOR_CARD_BORDER,
                 cursor="hand2" if key in {"bank_balance", "receivables", "payables"} else "",
                 height=72,
             )
@@ -284,6 +285,7 @@ class DashboardFrame(ctk.CTkFrame):
                 corner_radius=21,
             )
             badge.grid(row=0, column=0, padx=(12,8), pady=12, sticky="n")
+            self.kpi_badges_row1[key] = badge
 
             # Info frame
             info = ctk.CTkFrame(card, fg_color="transparent")
@@ -316,6 +318,7 @@ class DashboardFrame(ctk.CTkFrame):
 
         self.kpi_cards_row2 = {}
         self.kpi_labels_row2 = {}
+        self.kpi_badges_row2 = {}
         specs_row2 = [
             ("today_receipts", "Today's Receipts", "0 Vouchers", config.COLOR_INCOME, "↓"),
             ("today_payments", "Today's Payments", "0 Vouchers", config.COLOR_EXPENSE, "↑"),
@@ -325,8 +328,8 @@ class DashboardFrame(ctk.CTkFrame):
 
         for idx, (key, title, subtitle, accent, icon) in enumerate(specs_row2):
             card = ctk.CTkFrame(
-                row2, fg_color="#10192E", corner_radius=10,
-                border_width=1, border_color="#1B2848",
+                row2, fg_color=config.COLOR_BG_SECONDARY, corner_radius=10,
+                border_width=1, border_color=config.COLOR_CARD_BORDER,
                 cursor="hand2" if key in {"month_receipts", "month_payments"} else "",
                 height=72,
             )
@@ -349,6 +352,7 @@ class DashboardFrame(ctk.CTkFrame):
                 corner_radius=21,
             )
             badge.grid(row=0, column=0, padx=(12,8), pady=12, sticky="n")
+            self.kpi_badges_row2[key] = badge
 
             info = ctk.CTkFrame(card, fg_color="transparent")
             info.grid(row=0, column=1, sticky="nsew", padx=(0,12), pady=8)
@@ -374,13 +378,15 @@ class DashboardFrame(ctk.CTkFrame):
         for c in range(4):
             row2.grid_columnconfigure(c, weight=1)
 
-    @staticmethod
-    def _tint_color(hex_color: str, factor: float) -> str:
+    def _tint_color(self, hex_color: str, factor: float) -> str:
+        """Tint a color toward the current theme's card background (BG_TERTIARY)."""
+        # Use the active theme's tertiary background so the badge works in both modes.
+        bg_hex = config.COLOR_BG_TERTIARY
+        bg = tuple(int(bg_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
         hex_color = hex_color.lstrip('#')
         r = int(hex_color[0:2], 16)
         g = int(hex_color[2:4], 16)
         b = int(hex_color[4:6], 16)
-        bg = (0x10, 0x19, 0x2E)
         r = int(r * factor + bg[0] * (1 - factor))
         g = int(g * factor + bg[1] * (1 - factor))
         b = int(b * factor + bg[2] * (1 - factor))
@@ -393,8 +399,8 @@ class DashboardFrame(ctk.CTkFrame):
 
         # Left box (60%) – fixed height ~240
         left_box = ctk.CTkFrame(
-            container, fg_color="#10192E", corner_radius=10,
-            border_width=1, border_color="#1B2848",
+            container, fg_color=config.COLOR_BG_SECONDARY, corner_radius=10,
+            border_width=1, border_color=config.COLOR_CARD_BORDER,
             height=240,
         )
         left_box.pack(side="left", fill="both", expand=True, padx=(0, config.SPACING_MD))
@@ -410,7 +416,7 @@ class DashboardFrame(ctk.CTkFrame):
         # Manage button
         manage_btn = ctk.CTkButton(
             hdr, text="⚙ Manage", width=90, height=26,
-            corner_radius=6, fg_color="#182b59", hover_color="#244180",
+            corner_radius=6, fg_color=config.COLOR_BG_TERTIARY, hover_color=config.COLOR_PRIMARY,
             text_color=config.COLOR_TEXT_PRIMARY,
             font=ctk.CTkFont(size=11, weight="bold"),
             command=self._open_manage_expenses_dialog,
@@ -437,14 +443,17 @@ class DashboardFrame(ctk.CTkFrame):
             ("Today's Expenses", config.COLOR_PRIMARY),
             ("This Month's Expenses", config.COLOR_WARNING),
         ]
+        self.chip_value_labels = []
         for label_text, color in chip_data:
             chip = ctk.CTkFrame(chips_frame, fg_color=self._tint_color(color, 0.15),
                                 corner_radius=8, border_width=1, border_color=color)
             chip.pack(side="left", padx=(0, config.SPACING_SM), fill="y")
-            ctk.CTkLabel(
+            val_lbl = ctk.CTkLabel(
                 chip, text="₹ 0.00", font=ctk.CTkFont(size=12, weight="bold"),
                 text_color=color,
-            ).pack(padx=config.SPACING_MD, pady=config.SPACING_XS)
+            )
+            val_lbl.pack(padx=config.SPACING_MD, pady=config.SPACING_XS)
+            self.chip_value_labels.append(val_lbl)
             ctk.CTkLabel(
                 chip, text=label_text, font=ctk.CTkFont(size=9),
                 text_color=config.COLOR_TEXT_SECONDARY,
@@ -454,31 +463,8 @@ class DashboardFrame(ctk.CTkFrame):
         self.category_rows = []
         cat_frame = ctk.CTkFrame(left_box, fg_color="transparent")
         cat_frame.pack(fill="both", expand=True, padx=config.SPACING_LG, pady=(config.SPACING_SM, config.SPACING_MD))
-
-        categories = [
-            ("Food & Dining", "🍔", config.COLOR_INCOME),
-            ("Fuel", "⛽", config.COLOR_PRIMARY),
-            ("Shopping", "🛍️", config.COLOR_WARNING),
-            ("Utilities", "💡", config.COLOR_TRANSFER),
-            ("Transport", "🚌", config.COLOR_EXPENSE),
-            ("Other Expenses", "📦", config.COLOR_TEXT_MUTED),
-        ]
-        for cat_name, icon, color in categories:
-            row = ctk.CTkFrame(cat_frame, fg_color="transparent")
-            row.pack(fill="x", pady=3)
-            ctk.CTkLabel(row, text=f"{icon}  {cat_name}", font=ctk.CTkFont(size=11),
-                         text_color=config.COLOR_TEXT_PRIMARY, width=140, anchor="w").pack(side="left")
-            amt_lbl = ctk.CTkLabel(row, text="₹ 0.00", font=ctk.CTkFont(size=11, weight="bold"),
-                                   text_color=color, width=80, anchor="e")
-            amt_lbl.pack(side="left", padx=(config.SPACING_SM, 0))
-            prog = ctk.CTkProgressBar(row, width=180, progress_color=color,
-                                      fg_color=config.COLOR_BG_TERTIARY, corner_radius=4)
-            prog.set(0)
-            prog.pack(side="left", padx=config.SPACING_SM, fill="x", expand=True)
-            pct_lbl = ctk.CTkLabel(row, text="0%", font=ctk.CTkFont(size=10, weight="bold"),
-                                   text_color=config.COLOR_TEXT_SECONDARY, width=36, anchor="e")
-            pct_lbl.pack(side="left")
-            self.category_rows.append((cat_name, amt_lbl, prog, pct_lbl))
+        self.cat_frame = cat_frame
+        # Dynamic rows will be created in _update_analytics based on tracked ledgers
 
         # Total expenses subtotal
         total_row = ctk.CTkFrame(left_box, fg_color="transparent")
@@ -492,20 +478,23 @@ class DashboardFrame(ctk.CTkFrame):
 
         # Right box (40%) – fixed height ~240
         right_box = ctk.CTkFrame(
-            container, fg_color="#10192E", corner_radius=10,
-            border_width=1, border_color="#1B2848", width=400,
+            container, fg_color=config.COLOR_BG_SECONDARY, corner_radius=10,
+            border_width=1, border_color=config.COLOR_CARD_BORDER, width=400,
             height=240,
         )
         right_box.pack(side="right", fill="y", padx=(config.SPACING_MD, 0))
         right_box.pack_propagate(False)
 
-        # Donut chart
+        # Donut chart - initialize with theme-aware colors
+        is_dark = ctk.get_appearance_mode() == "Dark"
+        chart_bg = "#10192E" if is_dark else "#FFFFFF"
+        
         chart_frame = ctk.CTkFrame(right_box, fg_color="transparent")
         chart_frame.pack(fill="both", expand=True, padx=config.SPACING_LG, pady=(config.SPACING_MD, config.SPACING_SM))
         self.fig = Figure(figsize=(3.6, 2.8), dpi=100)
-        self.fig.patch.set_facecolor('#10192E')
+        self.fig.patch.set_facecolor(chart_bg)
         self.ax = self.fig.add_subplot(111)
-        self.ax.set_facecolor('#10192E')
+        self.ax.set_facecolor(chart_bg)
         self.canvas = FigureCanvasTkAgg(self.fig, master=chart_frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
@@ -548,202 +537,118 @@ class DashboardFrame(ctk.CTkFrame):
         self.days_progress.pack(padx=config.SPACING_MD, pady=(0, config.SPACING_XS), fill="x")
 
     # ------------------------------------------------------------------ #
-    # Expense ledger management
-    # ------------------------------------------------------------------ #
-    def _fetch_expense_ledgers(self) -> List[tuple]:
-        """Return list of (ledger_id, ledger_name) for Indirect/Direct Expense groups."""
-        try:
-            query = """
-                SELECT l.id, l.name
-                FROM ledgers l
-                JOIN groups g ON l.group_id = g.id
-                WHERE g.name IN ('Indirect Expenses', 'Direct Expenses')
-                ORDER BY l.name
-            """
-            rows = db.fetch_all(query)
-            return [(int(r["id"]), r["name"]) for r in rows]
-        except Exception:
-            return []
-
-    def _open_manage_ledgers_dialog(self) -> None:
-        """Modal dialog to choose which expense ledgers to track on dashboard."""
-        ledgers = self._fetch_expense_ledgers()
-        if not ledgers:
-            return
-
-        tracked = set(self._load_tracked_ledgers())
-        var_map = {}
-
-        dlg = ctk.CTkToplevel(self)
-        dlg.title("Manage Tracked Expense Ledgers")
-        dlg.transient(self.winfo_toplevel())
-        dlg.grab_set()
-        dlg.geometry("380x460")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=config.COLOR_BG_PRIMARY)
-
-        # Header
-        hdr = ctk.CTkFrame(dlg, fg_color="transparent")
-        hdr.pack(fill="x", padx=config.SPACING_LG, pady=(config.SPACING_LG, config.SPACING_MD))
-        ctk.CTkLabel(hdr, text="Select expense ledgers to show on Dashboard",
-                     font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=config.COLOR_TEXT_PRIMARY).pack(anchor="w")
-
-        # Scrollable list
-        scroll = ctk.CTkScrollableFrame(dlg, fg_color=config.COLOR_BG_SECONDARY,
-                                        corner_radius=8, border_width=1,
-                                        border_color=config.COLOR_CARD_BORDER)
-        scroll.pack(fill="both", expand=True, padx=config.SPACING_LG, pady=(0, config.SPACING_LG))
-
-        for lid, name in ledgers:
-            var = tk.BooleanVar(value=lid in tracked)
-            var_map[lid] = var
-            cb = ctk.CTkCheckBox(scroll, text=name, variable=var,
-                                 font=ctk.CTkFont(size=11),
-                                 fg_color=config.COLOR_PRIMARY,
-                                 hover_color=config.COLOR_PRIMARY_HOVER,
-                                 text_color=config.COLOR_TEXT_PRIMARY)
-            cb.pack(anchor="w", padx=config.SPACING_MD, pady=4)
-
-        # Buttons
-        btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=config.SPACING_LG, pady=(0, config.SPACING_LG))
-
-        def _save():
-            selected = [lid for lid, var in var_map.items() if var.get()]
-            self._save_tracked_ledgers(selected)
-            dlg.destroy()
-            self._update_analytics()
-
-        ctk.CTkButton(btn_frame, text="Save", width=100, height=32,
-                      corner_radius=config.BUTTON_CORNER_RADIUS,
-                      fg_color=config.COLOR_PRIMARY, hover_color=config.COLOR_PRIMARY_HOVER,
-                      command=_save).pack(side="right", padx=(config.SPACING_SM, 0))
-        ctk.CTkButton(btn_frame, text="Cancel", width=100, height=32,
-                      corner_radius=config.BUTTON_CORNER_RADIUS,
-                      fg_color=config.COLOR_BG_TERTIARY, hover_color=config.COLOR_PRIMARY,
-                      text_color=config.COLOR_TEXT_PRIMARY,
-                      command=dlg.destroy).pack(side="right")
-
-        # Center dialog
-        dlg.update_idletasks()
-        try:
-            px = self.winfo_rootx()
-            py = self.winfo_rooty()
-            pw = self.winfo_width()
-            ph = self.winfo_height()
-            dw = dlg.winfo_reqwidth()
-            dh = dlg.winfo_reqheight()
-            x = px + (pw - dw) // 2
-            y = py + (ph - dh) // 2
-            dlg.geometry(f"+{x}+{y}")
-        except Exception:
-            pass
-
-    def _period_date_range(self) -> tuple:
-        """Return (from_date, to_date) based on current period_var."""
-        today = date.today()
-        period = self.period_var.get()
-        if period == "Today":
-            return today, today
-        if period == "This Week":
-            start = today - timedelta(days=today.weekday())
-            return start, today
-        if period == "This Month":
-            start = today.replace(day=1)
-            return start, today
-        if period == "This Year":
-            start = today.replace(month=1, day=1)
-            return start, today
-        return today, today
-
-    # ------------------------------------------------------------------ #
     # analytics update using tracked ledgers
     # ------------------------------------------------------------------ #
     def _update_analytics(self) -> None:
-        # Load tracked ledger ids
-        tracked_ids = self._load_tracked_ledgers()
-        # Fetch actual totals per ledger for selected period
-        from_date, to_date = self._period_date_range()
-        ledger_totals = self._fetch_ledger_totals(tracked_ids, from_date, to_date)
+        from database.database import db
 
-        total_exp = sum(ledger_totals.values())
+        # 1. Get saved tracked ledger IDs (fallback to all expense account IDs if empty)
+        tracked_ids = getattr(self, "tracked_ledger_ids", [])
+        if not tracked_ids:
+            tracked_ids = self._load_tracked_ledgers()
+        if not tracked_ids:
+            rows = db.fetch_all("SELECT id FROM accounts WHERE company_id = ? AND (LOWER(account_group) LIKE '%expense%' OR LOWER(account_group) LIKE '%direct%' OR LOWER(account_group) LIKE '%indirect%')", (self.company_id,))
+            tracked_ids = [r['id'] for r in rows]
 
-        # Update category rows (now dynamic based on tracked ledgers)
-        # Clear existing rows
-        for _, amt_lbl, prog, pct_lbl in self.category_rows:
-            amt_lbl.configure(text="₹ 0.00")
-            prog.set(0)
-            pct_lbl.configure(text="0%")
-        # Repopulate with tracked ledgers (max 6 rows)
-        for idx, (lid, name) in enumerate(tracked_ids):
-            if idx >= len(self.category_rows):
-                break
-            val = ledger_totals.get(lid, 0.0)
-            _, amt_lbl, prog, pct_lbl = self.category_rows[idx]
-            amt_lbl.configure(text=f"₹ {val:,.2f}")
-            pct = (val / total_exp * 100) if total_exp > 0 else 0
-            prog.set(pct / 100)
-            pct_lbl.configure(text=f"{pct:.0f}%")
+        items = []
+        total_spent = 0.0
 
-        self.total_expenses_lbl.configure(text=f"₹ {total_exp:,.2f}")
+        if tracked_ids:
+            placeholders = ",".join(["?"] * len(tracked_ids))
+            query = f"""
+                SELECT 
+                    a.id,
+                    a.name,
+                    COALESCE(SUM(vd.debit_amount), 0.0) AS spent
+                FROM accounts a
+                LEFT JOIN voucher_details vd ON a.id = vd.account_id
+                WHERE a.id IN ({placeholders}) AND a.company_id = ?
+                GROUP BY a.id, a.name
+                ORDER BY spent DESC, a.name ASC
+            """
+            params = tuple(tracked_ids) + (self.company_id,)
+            rows = db.fetch_all(query, params)
+            for r in rows:
+                d = dict(r)
+                amt = float(d.get('spent') or 0.0)
+                total_spent += amt
+                items.append({'id': d['id'], 'name': d['name'], 'amount': amt})
 
-        # Donut chart
-        self.ax.clear()
-        if total_exp > 0 and any(v > 0 for v in ledger_totals.values()):
-            labels = [name for lid, name in tracked_ids if lid in ledger_totals and ledger_totals[lid] > 0]
-            sizes = [ledger_totals[lid] for lid, name in tracked_ids if lid in ledger_totals and ledger_totals[lid] > 0]
-            # generate colors
-            base_colors = ["#10B981", "#3B82F6", "#F59E0B", "#8B5CF6", "#EF4444", "#64748B"]
-            colors = base_colors[:len(sizes)]
-            wedges, texts, autotexts = self.ax.pie(
-                sizes, labels=None, autopct='%1.0f%%', startangle=90,
-                colors=colors, pctdistance=0.75, wedgeprops=dict(width=0.4, edgecolor='#10192E')
-            )
-            for t in autotexts:
-                t.set_color('#ffffff')
-                t.set_fontsize(8)
-                t.set_weight('bold')
-            self.ax.text(0, 0, f"Total\n₹{total_exp:,.0f}", ha='center', va='center',
-                         fontsize=11, fontweight='bold', color=config.COLOR_TEXT_PRIMARY)
+        # 2. Update Top 3 Stat Chips
+        self.total_expenses_lbl.configure(text=f"₹ {total_spent:,.2f}")
+
+        # 3. Dynamic Progress Rows in Left Box
+        for w in self.cat_frame.winfo_children():
+            w.destroy()
+
+        palette = ["#10B981", "#3B82F6", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#EF4444"]
+
+        # Get theme-aware colors
+        is_dark = ctk.get_appearance_mode() == "Dark"
+        text_primary = config.COLOR_TEXT_PRIMARY if is_dark else config.LIGHT_TEXT_PRIMARY
+        text_secondary = config.COLOR_TEXT_SECONDARY if is_dark else config.LIGHT_TEXT_SECONDARY
+        text_muted = config.COLOR_TEXT_MUTED if is_dark else config.LIGHT_TEXT_MUTED
+        bg_secondary = config.COLOR_BG_SECONDARY if is_dark else config.LIGHT_BG_SECONDARY
+        bg_tertiary = config.COLOR_BG_TERTIARY if is_dark else config.LIGHT_BG_TERTIARY
+        card_border = config.COLOR_CARD_BORDER if is_dark else config.LIGHT_CARD_BORDER
+        chart_bg = "#10192E" if is_dark else "#FFFFFF"
+        chart_edge = chart_bg
+        chart_text = "#FFFFFF" if is_dark else "#0F172A"
+        progress_bg = config.COLOR_BG_TERTIARY
+
+        if not items:
+            ctk.CTkLabel(self.cat_frame, text="No expense ledgers tracked. Click Manage.", text_color=text_muted).pack(pady=20)
         else:
-            self.ax.pie([1], labels=None, startangle=90, colors=['#1B2848'],
-                        wedgeprops=dict(width=0.4, edgecolor='#10192E'))
-            self.ax.text(0, 0, "No Expenses\nRecorded", ha='center', va='center',
-                         fontsize=10, fontweight='bold', color=config.COLOR_TEXT_MUTED)
+            for idx, item in enumerate(items):
+                col = palette[idx % len(palette)]
+                amt = item['amount']
+                pct = (amt / total_spent * 100) if total_spent > 0 else 0
 
-        self.ax.axis('equal')
-        self.fig.tight_layout()
+                row = ctk.CTkFrame(self.cat_frame, fg_color="transparent")
+                row.pack(fill="x", pady=3)
+
+                ctk.CTkLabel(row, text=item['name'], font=ctk.CTkFont(size=11), text_color=text_primary, width=140, anchor="w").pack(side="left")
+                ctk.CTkLabel(row, text=f"₹ {amt:,.2f}", font=ctk.CTkFont(size=11, weight="bold"), text_color=col, width=90, anchor="e").pack(side="left", padx=4)
+
+                pbar = ctk.CTkProgressBar(row, progress_color=col, fg_color=progress_bg, corner_radius=4, height=8)
+                pbar.set(pct / 100.0)
+                pbar.pack(side="left", padx=8, fill="x", expand=True)
+
+                ctk.CTkLabel(row, text=f"{pct:.0f}%", font=ctk.CTkFont(size=10), text_color=text_muted, width=40, anchor="e").pack(side="left")
+
+        # 4. Donut Chart & Legend in Right Box
+        self.ax.clear()
+        self.fig.patch.set_facecolor(chart_bg)
+        self.ax.set_facecolor(chart_bg)
+
+        # Only pass slices that have spent > 0
+        active_items = [it for it in items if it['amount'] > 0]
+        if active_items and total_spent > 0:
+            sizes = [it['amount'] for it in active_items]
+            chart_colors = palette[:len(active_items)]
+            self.ax.pie(sizes, colors=chart_colors, startangle=90, wedgeprops=dict(width=0.4, edgecolor=chart_edge))
+            self.ax.text(0, 0, f"Total\n₹{total_spent:,.0f}", ha='center', va='center', fontsize=10, fontweight='bold', color=chart_text)
+        else:
+            placeholder_color = bg_tertiary
+            self.ax.pie([1], startangle=90, colors=[placeholder_color], wedgeprops=dict(width=0.4, edgecolor=chart_edge))
+            self.ax.text(0, 0, "No Expenses\nRecorded", ha='center', va='center', fontsize=9, fontweight='bold', color=text_muted)
+
         self.canvas.draw()
 
-        # Legend
+        # 5. Legend in Right Box
         for widget in self.legend_frame.winfo_children():
             widget.destroy()
-        if total_exp > 0:
-            base_colors = ["#10B981", "#3B82F6", "#F59E0B", "#8B5CF6", "#EF4444", "#64748B"]
-            for idx, (lid, name) in enumerate(tracked_ids):
-                val = ledger_totals.get(lid, 0.0)
-                if val <= 0:
-                    continue
-                col = base_colors[idx % len(base_colors)]
+        if active_items and total_spent > 0:
+            for idx, it in enumerate(active_items):
+                col = palette[idx % len(palette)]
                 row = ctk.CTkFrame(self.legend_frame, fg_color="transparent")
                 row.pack(fill="x", pady=2)
                 dot = ctk.CTkLabel(row, text="●", text_color=col, font=ctk.CTkFont(size=12))
                 dot.pack(side="left", padx=(0, config.SPACING_SM))
-                ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=11),
-                             text_color=config.COLOR_TEXT_PRIMARY).pack(side="left")
-                ctk.CTkLabel(row, text=f"₹ {val:,.0f} ({(val/total_exp*100):.0f}%)",
-                             font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_SECONDARY).pack(side="right")
+                ctk.CTkLabel(row, text=it['name'], font=ctk.CTkFont(size=11), text_color=text_primary).pack(side="left")
+                ctk.CTkLabel(row, text=f"₹ {it['amount']:,.0f} ({(it['amount']/total_spent*100):.0f}%)", font=ctk.CTkFont(size=11), text_color=text_secondary).pack(side="right")
 
-        # Mini stats
-        avg_daily = total_exp / 30 if total_exp else 0
-        self.avg_daily_lbl.configure(text=f"₹ {avg_daily:,.2f}")
-        today = datetime.today()
-        days_passed = today.day
-        days_in_month = (today.replace(month=today.month % 12 + 1, day=1) - \
-                         today.replace(day=1)).days if today.month < 12 else 31
-        self.days_lbl.configure(text=f"{days_passed} / {days_in_month}")
-        self.days_progress.set(days_passed / days_in_month if days_in_month else 0)
+        self.canvas.draw()
 
     def _fetch_ledger_totals(self, ledger_ids: List[int], from_date: date, to_date: date) -> Dict[int, float]:
         """Return dict ledger_id -> total debit amount for vouchers in date range."""
@@ -815,12 +720,13 @@ class DashboardFrame(ctk.CTkFrame):
         if card is None:
             return
         try:
+            is_dark = ctk.get_appearance_mode() == "Dark"
             if hovered:
                 card.configure(border_color=config.COLOR_PRIMARY,
-                               fg_color="#112244")
+                               fg_color="#112244" if is_dark else "#DBEAFE")
             else:
-                card.configure(border_color="#1B2848",
-                               fg_color="#10192E")
+                card.configure(border_color=config.COLOR_CARD_BORDER,
+                               fg_color=config.COLOR_BG_SECONDARY)
         except Exception:
             pass
 
@@ -892,82 +798,41 @@ class DashboardFrame(ctk.CTkFrame):
             f"{self.data.get('company_name', '')}"
         )
 
-    def _update_analytics(self) -> None:
-        total_exp = float(self.data.get('total_expenses', 0.0) or 0.0)
-        todays_exp = float(self.data.get('today_expenses', 0.0) or 0.0)
-        month_exp = float(self.data.get('month_expenses', 0.0) or 0.0)
+    def refresh_theme(self) -> None:
+        """Refresh theme-dependent colors (chart, stat chips, badges, category rows)."""
+        # Refresh KPI badge backgrounds using current theme
+        for badge_dict in (getattr(self, "kpi_badges_row1", {}), getattr(self, "kpi_badges_row2", {})):
+            for key, badge in badge_dict.items():
+                try:
+                    accent = badge.cget("text_color")
+                    badge.configure(fg_color=self._tint_color(accent, 0.15))
+                except Exception:
+                    pass
 
-        # Category breakdown
-        cat_vals = {
-            "Food & Dining": total_exp * 0.30,
-            "Fuel": total_exp * 0.20,
-            "Shopping": total_exp * 0.15,
-            "Utilities": total_exp * 0.10,
-            "Transport": total_exp * 0.15,
-            "Other Expenses": total_exp * 0.10,
-        }
-        for cat_name, amt_lbl, prog, pct_lbl in self.category_rows:
-            val = cat_vals.get(cat_name, 0.0)
-            amt_lbl.configure(text=f"₹ {val:,.2f}")
-            pct = (val / total_exp * 100) if total_exp > 0 else 0
-            prog.set(pct / 100)
-            pct_lbl.configure(text=f"{pct:.0f}%")
-
-        self.total_expenses_lbl.configure(text=f"₹ {total_exp:,.2f}")
-
-        # Donut chart
-        self.ax.clear()
-        labels = list(cat_vals.keys())
-        sizes = [cat_vals[l] for l in labels]
-        colors = ["#10B981", "#3B82F6", "#F59E0B", "#8B5CF6", "#EF4444", "#64748B"]
-
-        # Guard against zero / missing total expenses
-        total_exp_val = float(total_exp or 0.0)
-
-        if total_exp_val > 0 and any(s > 0 for s in sizes):
-            wedges, texts, autotexts = self.ax.pie(
-                sizes, labels=None, autopct='%1.0f%%', startangle=90,
-                colors=colors, pctdistance=0.75, wedgeprops=dict(width=0.4, edgecolor='#10192E')
-            )
-            for t in autotexts:
-                t.set_color('#ffffff')
-                t.set_fontsize(8)
-                t.set_weight('bold')
-            self.ax.text(0, 0, f"Total\n₹{total_exp_val:,.0f}", ha='center', va='center',
-                         fontsize=11, fontweight='bold', color=config.COLOR_TEXT_PRIMARY)
-        else:
-            # Safe placeholder when there are no expenses
-            self.ax.pie([1], labels=None, startangle=90, colors=['#1B2848'],
-                        wedgeprops=dict(width=0.4, edgecolor='#10192E'))
-            self.ax.text(0, 0, "No Expenses\nRecorded", ha='center', va='center',
-                         fontsize=10, fontweight='bold', color=config.COLOR_TEXT_MUTED)
-
-        self.ax.axis('equal')
-        self.fig.tight_layout()
-        self.canvas.draw()
-
-        # Legend
-        for widget in self.legend_frame.winfo_children():
-            widget.destroy()
-        for lbl, col, val in zip(labels, colors, sizes):
-            row = ctk.CTkFrame(self.legend_frame, fg_color="transparent")
-            row.pack(fill="x", pady=2)
-            dot = ctk.CTkLabel(row, text="●", text_color=col, font=ctk.CTkFont(size=12))
-            dot.pack(side="left", padx=(0, config.SPACING_SM))
-            ctk.CTkLabel(row, text=lbl, font=ctk.CTkFont(size=11),
-                         text_color=config.COLOR_TEXT_PRIMARY).pack(side="left")
-            ctk.CTkLabel(row, text=f"₹ {val:,.0f} ({(val/total_exp*100):.0f}%)" if total_exp > 0 else f"₹ {val:,.0f} (0%)",
-                         font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_SECONDARY).pack(side="right")
-
-        # Mini stats
-        avg_daily = month_exp / 30 if month_exp else 0
-        self.avg_daily_lbl.configure(text=f"₹ {avg_daily:,.2f}")
-        today = datetime.today()
-        days_passed = today.day
-        days_in_month = (today.replace(month=today.month % 12 + 1, day=1) - \
-                         today.replace(day=1)).days if today.month < 12 else 31
-        self.days_lbl.configure(text=f"{days_passed} / {days_in_month}")
-        self.days_progress.set(days_passed / days_in_month if days_in_month else 0)
+        # Update chart background
+        chart_bg = config.COLOR_BG_PRIMARY
+        try:
+            self.fig.patch.set_facecolor(chart_bg)
+            self.ax.set_facecolor(chart_bg)
+            self.canvas.draw_idle()
+        except Exception:
+            pass
+        
+        # Refresh stat chips (they use _tint_color which is now theme-aware)
+        chip_data = [
+            ("Total Expenses", config.COLOR_TRANSFER),
+            ("Today's Expenses", config.COLOR_PRIMARY),
+            ("This Month's Expenses", config.COLOR_WARNING),
+        ]
+        for idx, (label_text, color) in enumerate(chip_data):
+            try:
+                chip_frame = self.chip_value_labels[idx].master
+                chip_frame.configure(fg_color=self._tint_color(color, 0.15), border_color=color)
+            except Exception:
+                pass
+        
+        # Refresh category rows (re-run analytics to rebuild with new colors)
+        self._update_analytics()
 
     def _sync_date_labels(self) -> None:
         try:
@@ -1247,7 +1112,7 @@ class ManageExpenseLedgersDialog(ctk.CTkToplevel):
         self.title("Select Expense Ledgers to Track")
         self.transient(parent)
         self.protocol("WM_DELETE_WINDOW", self._close)
-        self.configure(fg_color="#10192E")
+        self.configure(fg_color=config.COLOR_BG_PRIMARY)
         self.geometry("520x600")
         self.minsize(520, 600)
         self.resizable(False, False)
@@ -1278,7 +1143,8 @@ class ManageExpenseLedgersDialog(ctk.CTkToplevel):
                      font=ctk.CTkFont(size=14, weight="bold"),
                      text_color=config.COLOR_TEXT_PRIMARY).pack(side="left")
         ctk.CTkButton(hdr, text="✕", width=30, height=30,
-                      corner_radius=6, fg_color="#182b59", hover_color="#244180",
+                      corner_radius=6, fg_color=config.COLOR_BG_TERTIARY, hover_color=config.COLOR_PRIMARY,
+                      text_color=config.COLOR_TEXT_PRIMARY,
                       command=self._close).pack(side="right")
 
         # Search bar
@@ -1325,59 +1191,85 @@ class ManageExpenseLedgersDialog(ctk.CTkToplevel):
                       fg_color=config.COLOR_PRIMARY, hover_color=config.COLOR_PRIMARY_HOVER,
                       command=self._save).pack(side="right")
 
-    def _fetch_expense_ledgers(self):
-        """Try multiple queries to fetch expense ledgers for the current company."""
+    def _fetch_expense_ledgers(self) -> list:
+        """Auto-detect tables & columns, then fetch expense ledger rows for the current company."""
         from database.database import db
 
-        queries = [
-            # Attempt 1: Ledgers + Groups join
-            """
-            SELECT l.id, l.name, g.name AS group_name
-            FROM ledgers l
-            LEFT JOIN groups g ON l.group_id = g.id
-            WHERE l.company_id = ? 
-              AND (
-                  LOWER(g.name) LIKE '%expense%' 
-                  OR LOWER(g.name) LIKE '%direct%' 
-                  OR LOWER(g.name) LIKE '%indirect%'
-                  OR LOWER(l.name) IN ('food', 'fuel', 'food & dining', 'tea', 'office expense', 'salary', 'rent')
-              )
-            ORDER BY l.name ASC
-            """,
-            # Attempt 2: Accounts table
-            """
-            SELECT id, name, COALESCE(account_group, type, '') AS group_name
-            FROM accounts
-            WHERE company_id = ?
-              AND (
-                  LOWER(COALESCE(account_group, type, '')) LIKE '%expense%'
-                  OR LOWER(name) LIKE '%expense%'
-                  OR LOWER(name) IN ('food', 'fuel', 'food & dining', 'tea', 'salary', 'rent')
-              )
-            ORDER BY name ASC
-            """,
-            # Attempt 3: Universal Fallback (All non-cash/bank accounts)
-            """
-            SELECT id, name, 'Expense' AS group_name
-            FROM (
-                SELECT id, name, company_id FROM accounts
-                UNION ALL
-                SELECT id, name, company_id FROM ledgers
-            ) WHERE company_id = ?
-            ORDER BY name ASC
-            """
-        ]
+        print(f"\n--- [DEBUG] FETCHING LEDGERS FOR COMPANY ID: {self.company_id} ---")
 
-        for q in queries:
-            try:
-                rows = db.fetch_all(q, (self.company_id,))
-                if rows:
-                    print(f"[DEBUG] Successfully loaded {len(rows)} ledgers using query.")
-                    return rows
-            except Exception as e:
-                print(f"[DEBUG] Query failed: {e}")
-                continue
-        return []
+        # 1. List all tables
+        tables = [r['name'] for r in db.fetch_all("SELECT name FROM sqlite_master WHERE type='table'")]
+        print(f"[DEBUG] Available Tables: {tables}")
+
+        # 2. Choose target table
+        target_table = None
+        for tbl in ['ledgers', 'accounts', 'account_masters', 'parties']:
+            if tbl in tables:
+                target_table = tbl
+                break
+
+        if not target_table:
+            print("[DEBUG] No suitable ledger/account table found in database!")
+            return []
+
+        # 3. Inspect columns
+        cols = [r['name'] for r in db.fetch_all(f"PRAGMA table_info({target_table})")]
+        print(f"[DEBUG] Table '{target_table}' Columns: {cols}")
+
+        # 4. Build query – prefer expense‑specific filter when possible
+        has_comp = 'company_id' in cols
+        name_col = 'name' if 'name' in cols else cols[1]
+        id_col = 'id' if 'id' in cols else cols[0]
+
+        # If we have an accounts table with account_group, use a focused expense query
+        if target_table == 'accounts' and 'account_group' in cols:
+            sql = """
+                SELECT id, name, account_group AS group_name
+                FROM accounts
+                WHERE company_id = ?
+                  AND (
+                      LOWER(account_group) LIKE '%expense%'
+                      OR LOWER(account_group) LIKE '%direct expense%'
+                      OR LOWER(account_group) LIKE '%indirect expense%'
+                      OR LOWER(name) IN ('food', 'fuel', 'rent', 'alka exp', 'office expense', 'electricity')
+                  )
+                  AND LOWER(account_group) NOT LIKE '%income%'
+                ORDER BY account_group ASC, name ASC
+            """
+            rows = db.fetch_all(sql, (self.company_id,))
+            # fallback if nothing matched
+            if not rows:
+                print("[DEBUG] Expense filter returned zero rows, falling back to all accounts for company...")
+                sql_fallback = f"SELECT {id_col} AS id, {name_col} AS name, account_group AS group_name FROM {target_table}"
+                if has_comp:
+                    sql_fallback += f" WHERE company_id = ? ORDER BY {name_col} ASC"
+                    rows = db.fetch_all(sql_fallback, (self.company_id,))
+                else:
+                    sql_fallback += f" ORDER BY {name_col} ASC"
+                    rows = db.fetch_all(sql_fallback)
+        else:
+            # Generic safe query for other tables
+            grp_col = "'' AS group_name"
+            for g in ['account_group', 'group_name', 'group_id', 'type', 'category']:
+                if g in cols:
+                    grp_col = f"{g} AS group_name"
+                    break
+            base_sql = f"SELECT {id_col} AS id, {name_col} AS name, {grp_col} FROM {target_table}"
+            if has_comp:
+                sql = f"{base_sql} WHERE company_id = ? ORDER BY {name_col} ASC"
+                rows = db.fetch_all(sql, (self.company_id,))
+                if not rows:
+                    print("[DEBUG] Zero rows with company_id, trying fallback without company_id filter...")
+                    rows = db.fetch_all(f"{base_sql} ORDER BY {name_col} ASC")
+            else:
+                sql = f"{base_sql} ORDER BY {name_col} ASC"
+                rows = db.fetch_all(sql)
+
+        print(f"[DEBUG] Total Rows Fetched from '{target_table}': {len(rows)}")
+        if rows:
+            print(f"[DEBUG] Sample Row: {dict(rows[0])}")
+
+        return rows
 
     def _load_ledgers(self):
         """Fetch expense ledgers and render checkboxes in the scrollable frame."""
@@ -1392,7 +1284,7 @@ class ManageExpenseLedgersDialog(ctk.CTkToplevel):
             ctk.CTkLabel(
                 self.scroll,
                 text="No ledgers found. Please verify company ID and ledger groups.",
-                text_color="#EF4444",
+                text_color=config.COLOR_EXPENSE,
                 font=ctk.CTkFont(size=12)
             ).pack(pady=20)
             self.all_ledgers = []
@@ -1400,10 +1292,12 @@ class ManageExpenseLedgersDialog(ctk.CTkToplevel):
 
         tracked = set(self.dashboard._load_tracked_ledgers())
         self.all_ledgers = []
-        for acc in rows:
+        for row in rows:
+            # Convert sqlite3.Row to dict safely
+            acc = dict(row)
             acc_id = int(acc["id"])
             name = acc["name"]
-            grp = acc.get("group_name") or "Expense"
+            grp = acc.get("group_name") or acc.get("account_group") or "Expense"
 
             self.all_ledgers.append((acc_id, name, grp))
 
@@ -1418,9 +1312,9 @@ class ManageExpenseLedgersDialog(ctk.CTkToplevel):
                 text=f"{name}  —  [{grp}]",
                 variable=var,
                 font=ctk.CTkFont(size=12),
-                text_color="#FFFFFF",
-                fg_color="#3B82F6",
-                hover_color="#2563EB"
+                text_color=config.COLOR_TEXT_PRIMARY,
+                fg_color=config.COLOR_PRIMARY,
+                hover_color=config.COLOR_PRIMARY_HOVER
             )
             cb.pack(side="left", fill="x", expand=True)
             self.checkbox_widgets[acc_id] = cb

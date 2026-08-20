@@ -39,6 +39,10 @@ class LedgerPicker(ctk.CTkFrame):
         groups: Optional[List[str]] = None,
         on_add_new: Optional[Callable[[], None]] = None,
         on_tab: Optional[Callable[[], None]] = None,
+        placeholder: str = "",
+        fg_color: str = None,
+        border_color: str = None,
+        text_color: str = None,
     ):
         super().__init__(master, fg_color="transparent")
         self.company_id = company_id
@@ -47,15 +51,27 @@ class LedgerPicker(ctk.CTkFrame):
         self.groups = groups  # Optional list of account groups to restrict to.
         self.on_add_new = on_add_new  # Optional "+ New ledger" callback.
         self.on_tab = on_tab  # Optional forward-tab navigation hook.
+        self._placeholder = placeholder
 
         self.entry_var = tk.StringVar()
         self.entry_var.trace_add("write", self._on_search)
-        self.entry = ctk.CTkEntry(
-            self, textvariable=self.entry_var, width=width,
+        entry_kwargs = dict(
+            textvariable=self.entry_var, width=width,
             corner_radius=config.INPUT_CORNER_RADIUS,
             font=ctk.CTkFont(size=config.FONT_BODY_SIZE),
         )
+        if fg_color:
+            entry_kwargs["fg_color"] = fg_color
+        if border_color:
+            entry_kwargs["border_color"] = border_color
+        if text_color:
+            entry_kwargs["text_color"] = text_color
+        self.entry = ctk.CTkEntry(self, **entry_kwargs)
         self.entry.pack(side="left", fill="x", expand=True)
+        
+        # Set placeholder text
+        if placeholder:
+            self.entry.configure(placeholder_text=placeholder)
         self.entry.bind("<KeyRelease>", self._on_search_event)
         self.entry.bind("<Down>", lambda _e: self._move(1))
         self.entry.bind("<Up>", lambda _e: self._move(-1))
@@ -67,11 +83,14 @@ class LedgerPicker(ctk.CTkFrame):
         self.entry.bind("<FocusOut>", self._on_focus_out)
 
         # "+ New" affordance: opens the Add-Ledger modal when one is wired.
+        new_btn_fg = fg_color or config.COLOR_BG_TERTIARY
+        new_btn_hover = config.COLOR_PRIMARY_HOVER
+        new_btn_text = text_color or config.COLOR_TEXT_PRIMARY
         self.new_btn = ctk.CTkButton(
             self, text="+", width=28, height=28,
             corner_radius=config.BUTTON_CORNER_RADIUS,
-            fg_color=config.COLOR_BG_TERTIARY, hover_color=config.COLOR_PRIMARY_HOVER,
-            text_color=config.COLOR_TEXT_PRIMARY,
+            fg_color=new_btn_fg, hover_color=new_btn_hover,
+            text_color=new_btn_text,
             command=self._on_add_new,
         )
         self.new_btn.pack(side="right", padx=(4, 0))

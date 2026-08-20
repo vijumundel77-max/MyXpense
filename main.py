@@ -406,6 +406,13 @@ class ExpenzoApp(ctk.CTk):
         # Re-tint every existing widget (all open screens) to the active theme.
         theme.apply_palette(self)
 
+        # If the current view has a refresh_theme method, call it (e.g., Dashboard).
+        if self.current_view and hasattr(self.current_view, "refresh_theme"):
+            try:
+                self.current_view.refresh_theme()
+            except Exception:
+                pass
+
         dark = ctk.get_appearance_mode() != "Light"
         text_primary = config.COLOR_TEXT_PRIMARY if dark else config.LIGHT_TEXT_PRIMARY
         text_secondary = config.COLOR_TEXT_SECONDARY if dark else config.LIGHT_TEXT_SECONDARY

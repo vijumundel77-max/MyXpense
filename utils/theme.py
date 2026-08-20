@@ -230,9 +230,9 @@ _TOKEN_TABLE = {
     "TEXT_PRIMARY": (config.DARK_TEXT_PRIMARY, config.LIGHT_TEXT_PRIMARY),
     "TEXT_SECONDARY": (config.DARK_TEXT_SECONDARY, config.LIGHT_TEXT_SECONDARY),
     "TEXT_MUTED": (config.DARK_TEXT_MUTED, config.LIGHT_TEXT_MUTED),
-    "SIDEBAR_ACCENT": (config.SIDEBAR_ACCENT, config.LIGHT_SIDEBAR_ACCENT),
-    "SIDEBAR_ACCENT_HOVER": (config.SIDEBAR_ACCENT_HOVER, config.LIGHT_SIDEBAR_ACCENT_HOVER),
-    "SIDEBAR_ACCENT_TEXT": (config.SIDEBAR_ACCENT_TEXT, config.LIGHT_SIDEBAR_ACCENT_TEXT),
+    "SIDEBAR_ACCENT": (config.DARK_SIDEBAR_ACCENT, config.LIGHT_SIDEBAR_ACCENT),
+    "SIDEBAR_ACCENT_HOVER": (config.DARK_SIDEBAR_ACCENT_HOVER, config.LIGHT_SIDEBAR_ACCENT_HOVER),
+    "SIDEBAR_ACCENT_TEXT": (config.DARK_SIDEBAR_ACCENT_TEXT, config.LIGHT_SIDEBAR_ACCENT_TEXT),
 }
 
 # Reverse lookup: exact hex (lowercased) -> token name.  Colliding hexes
@@ -309,7 +309,7 @@ _BG_OPTIONS = {
 
 # Extra options that carry a themed color (borders, fields, toggles, etc.).
 _EXTRA_OPTIONS = {
-    "CTkButton": ("border_color", "hover_color"),
+    "CTkButton": ("border_color", "hover_color", "text_color_disabled", "fg_color_disabled"),
     "CTkComboBox": ("border_color",),
     "CTkEntry": ("border_color",),
     "CTkCheckBox": ("border_color",),
@@ -336,23 +336,38 @@ def _classify_option(child, opt: str, role: str, value: str) -> str | None:
     space (text vs background), and the hex look-up resolves within that role.
 
     Colliding hexes (e.g. #94A3B8 is both the dark TEXT_SECONDARY and the
-    light TEXT_MUTED) are resolved deterministically by checking the DARK
-    mapping first — the app builds widgets from ``config.COLOR_*``, so a hex
-    that equals a dark token is that dark token.
+    light TEXT_MUTED) are resolved by checking the current theme's tokens first.
     """
     if not value or not isinstance(value, str):
         return None
     low = value.lower()
     if low in _PRESERVE_COLORS or low == "transparent" or low == "#000000":
         return None
-    # Role-specific tokens in FIXED order (dark-text first for collisions).
+    
+    # Use current theme to prioritize matching (light tokens first in light mode, etc.)
+    is_dark_mode = config.is_dark()
+    
+    # Role-specific tokens in FIXED order.
     if role == "text":
-        role_order = ("TEXT_SECONDARY", "TEXT_PRIMARY", "TEXT_MUTED")
+        role_order = ("TEXT_MUTED", "TEXT_SECONDARY", "TEXT_PRIMARY")
     else:
         role_order = ("BG_SECONDARY", "BG_PRIMARY", "BG_TERTIARY", "BG_MUTED", "CARD_BORDER")
+    
+    # Check current theme's variant first to avoid cross-theme collisions
+    for token in role_order:
+        dark_hex, light_hex = _TOKEN_TABLE[token]
+        if is_dark_mode:
+            if low == dark_hex.lower():
+                return token
+        else:
+            if low == light_hex.lower():
+                return token
+    
+    # Fall back to checking the other theme's variant
     for token in role_order:
         if _hex_matches_token(value, token):
             return token
+    
     # Fall back to the full table (for tokens without a role restriction).
     for token in _TOKEN_PRIORITY:
         if _hex_matches_token(value, token):
@@ -381,6 +396,12 @@ def _retint_child(child) -> None:
                 child.configure(**{opt: _resolve_token(token)})
             except Exception:
                 pass
+        elif value.lower() == "transparent":
+            # Force refresh of transparent frames so they inherit updated parent background.
+            try:
+                child.configure(**{opt: "transparent"})
+            except Exception:
+                pass
 
     # ---- text (text_color) ----
     if cls in _TEXT_OPTIONS:
@@ -400,7 +421,7 @@ def _retint_child(child) -> None:
             except Exception:
                 pass
 
-    # ---- extra themed options (borders, fields, toggles) ----
+    # ---- extra themed options (borders, fields, toggles, disabled states) ----
     for opt in _EXTRA_OPTIONS.get(cls, ()):
         try:
             value = str(child.cget(opt) or "")
@@ -411,7 +432,11 @@ def _retint_child(child) -> None:
         token = getattr(child, "_theme_tokens", {}).get(opt)
         if token is None:
             # Border color is a background-ish token (CARD_BORDER or BG_TERTIARY).
-            token = _classify_option(child, opt, "bg", value)
+            # Disabled colors: map to muted/secondary tokens.
+            if opt in ("text_color_disabled", "fg_color_disabled"):
+                token = _classify_option(child, opt, "text" if "text" in opt else "bg", value)
+            else:
+                token = _classify_option(child, opt, "bg", value)
             if token:
                 _remember_token(child, opt, token)
         if token and token in _TOKEN_TABLE:
@@ -453,3 +478,68 @@ def apply_palette(root) -> None:
     semantic token is resolved against the active palette, so a single call
     re-colors everything (repeated calls are idempotent)."""
     _apply_palette(root)
+    # Also refresh ttk Treeview styles and widget colors
+    refresh_treeview_styles(root)
+
+
+def refresh_treeview_styles(root) -> None:
+    """Re-apply the current theme's ttk.Style to all Treeview widgets under root.
+    
+    This ensures Treeview background, foreground, heading, and selection colors
+    match the active theme immediately without needing to recreate the widgets.
+    """
+    try:
+        import customtkinter as ctk
+        mode = "light" if ctk.get_appearance_mode() == "Light" else "dark"
+        apply_theme(root, mode=mode)
+    except Exception:
+        pass
+    
+    dark = config.is_dark()
+    bg_muted = config.COLOR_BG_MUTED if dark else config.LIGHT_BG_MUTED
+    bg_secondary = config.COLOR_BG_SECONDARY if dark else config.LIGHT_BG_SECONDARY
+    bg_tertiary = config.COLOR_BG_TERTIARY if dark else config.LIGHT_BG_TERTIARY
+    text_primary = config.COLOR_TEXT_PRIMARY if dark else config.LIGHT_TEXT_PRIMARY
+    text_secondary = config.COLOR_TEXT_SECONDARY if dark else config.LIGHT_TEXT_SECONDARY
+    text_muted = config.COLOR_TEXT_MUTED if dark else config.LIGHT_TEXT_MUTED
+    selected_bg = config.COLOR_PRIMARY
+    selected_fg = "#FFFFFF"
+    hover_bg = config.COLOR_HOVER_SURFACE
+    expense_color = config.COLOR_EXPENSE
+    income_color = config.COLOR_INCOME
+    
+    def _walk(widget):
+        try:
+            if isinstance(widget, ttk.Treeview):
+                widget.configure(style="Treeview")
+                widget.tag_configure("even", foreground=text_primary, background=bg_muted)
+                widget.tag_configure("odd", foreground=text_primary, background=bg_secondary)
+                widget.tag_configure("cancelled", foreground=text_muted, background=bg_muted)
+                widget.tag_configure("total", foreground=text_primary, background=bg_tertiary)
+                widget.tag_configure("header", foreground=text_secondary, background=bg_muted)
+                widget.tag_configure("hover", background=hover_bg)
+                widget.tag_configure("in", foreground=income_color)
+                widget.tag_configure("out", foreground=expense_color)
+                widget.tag_configure("cancelled", background=[("selected", selected_bg)],
+                                    foreground=[("selected", selected_fg)])
+                widget.tag_configure("total", background=[("selected", selected_bg)],
+                                    foreground=[("selected", selected_fg)])
+        except Exception:
+            pass
+        try:
+            for child in widget.winfo_children():
+                _walk(child)
+        except Exception:
+            pass
+    
+    try:
+        _walk(root)
+    except Exception:
+        pass
+    
+    # Also refresh custom picker style if it exists
+    try:
+        from ui.ledger_picker import configure_picker_style
+        configure_picker_style(root)
+    except Exception:
+        pass
