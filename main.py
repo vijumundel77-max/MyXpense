@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import tkinter as tk
 
 import customtkinter as ctk
 
@@ -114,6 +115,8 @@ class ExpenzoApp(ctk.CTk):
         self.company_service = CompanyService(db)
         db.seed_expenzo_defaults()
         self.current_company_id = self._resolve_company_id()
+        # Load available companies for quick switcher
+        self._load_available_companies()
         # Ensure the 30 default Chart-of-Accounts groups exist for this company
         # (idempotent; existing groups are preserved).
         from services.group_service import group_service
@@ -166,9 +169,54 @@ class ExpenzoApp(ctk.CTk):
         row = db.fetch_one("SELECT name FROM companies WHERE id = ?", (self.current_company_id,))
         return row["name"] if row else "No Company"
 
+    def _load_available_companies(self) -> None:
+        """Fetch companies safely (handles missing is_active column or different table name)."""
+        from database.database import db
+        rows = []
+        # Try preferred query with is_active on 'companies'
+        try:
+            rows = db.fetch_all("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name ASC")
+        except Exception:
+            # Fallback 1: same table without is_active
+            try:
+                rows = db.fetch_all("SELECT id, name FROM companies ORDER BY name ASC")
+            except Exception:
+                # Fallback 2: alternate table name 'company'
+                try:
+                    rows = db.fetch_all("SELECT id, name FROM company ORDER BY name ASC")
+                except Exception:
+                    rows = []
+
+        self.company_map = {}
+        self.company_names = []
+        for r in rows:
+            display = f"🏢  {r['name']}"
+            self.company_map[display] = r['id']
+            self.company_names.append(display)
+
+        # Ensure current company is in list (it should be)
+        current_display = f"🏢  {self._company_name()}"
+        if current_display not in self.company_names:
+            self.company_names.insert(0, current_display)
+            self.company_map[current_display] = self.current_company_id
+
+        # set variable default
+        self.company_var = tk.StringVar(value=current_display)
+
+    def _on_quick_company_change(self, selected_display: str) -> None:
+        new_company_id = self.company_map.get(selected_display)
+        if new_company_id and new_company_id != self.current_company_id:
+            # 1. Update global date control
+            from services.date_control_service import date_control
+            date_control.set_company(new_company_id)
+
+            # 2. Switch company context and refresh view
+            self.switch_company(new_company_id)
+            # Title update
+            self.title(f"{APP_NAME} — {selected_display}")
+
     def switch_company(self, company_id: int) -> None:
         self.current_company_id = int(company_id)
-        self.company_label.configure(text=self._company_name())
         # Re-open the current view so it reflects the new company.
         if self.current_view_name:
             getattr(self, f"show_{self.current_view_name}")()
@@ -359,18 +407,25 @@ class ExpenzoApp(ctk.CTk):
         )
         self._header_chip.pack(side="left", padx=(20, 12))
 
-        self.company_label = ctk.CTkButton(
+        # Quick company switcher dropdown (self.company_var already created in _load_available_companies)
+        self.company_dropdown = ctk.CTkOptionMenu(
             self.header,
-            text=f"🏢  {self._company_name()}",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color="transparent",
-            hover_color=COLOR_BG_TERTIARY,
-            text_color=COLOR_PRIMARY,
+            values=self.company_names,
+            variable=self.company_var,
+            command=self._on_quick_company_change,
+            width=180,
             height=32,
             corner_radius=8,
-            command=self.show_masters,
+            fg_color=("#E2E8F0", "#16223E"),
+            button_color=("#CBD5E1", "#1E3A8A"),
+            button_hover_color=("#94A3B8", "#1E3A8A"),
+            text_color=("#0F172A", "#60A5FA"),
+            font=ctk.CTkFont(size=13, weight="bold"),
+            dropdown_fg_color=("#F8FAFC", "#0F172A"),
+            dropdown_text_color=("#0F172A", "#E2E8F0"),
+            dropdown_hover_color=("#E2E8F0", "#1E3A8A"),
         )
-        self.company_label.pack(side="right", padx=(0, 20))
+        self.company_dropdown.pack(side="right", padx=(0, 20))
 
         self.theme_toggle = ctk.CTkButton(
             self.header,
@@ -444,7 +499,11 @@ class ExpenzoApp(ctk.CTk):
 
         # Header chrome.
         self._header_chip.configure(text_color=text_primary, fg_color=bg_tertiary)
-        self.company_label.configure(text_color=config.COLOR_PRIMARY)
+        # Dropdown uses its own fg/button colors; ensure text color matches theme
+        try:
+            self.company_dropdown.configure(text_color=("#0F172A", "#60A5FA"))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # navigation

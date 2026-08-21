@@ -134,6 +134,7 @@ class CashBookService:
               AND v.company_id = ?
               AND v.status != ?
               AND v.voucher_date < ?
+              AND LOWER(v.voucher_type) <> 'contra'
             GROUP BY vd.account_id
             """,
             tuple(account_ids) + (accounts[0]['company_id'], STATUS_CANCELLED, from_date.isoformat()),
@@ -193,6 +194,7 @@ class CashBookService:
             WHERE vd.account_id IN ({placeholders})
               AND v.company_id = ?
               AND v.status != ?
+              AND LOWER(v.voucher_type) <> 'contra'
             ORDER BY v.voucher_date, v.id, vd.id
             """,
             tuple(account_ids) + (company_id, STATUS_CANCELLED),

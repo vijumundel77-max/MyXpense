@@ -541,49 +541,98 @@ class DashboardFrame(ctk.CTkFrame):
     # ------------------------------------------------------------------ #
     def _update_analytics(self) -> None:
         from database.database import db
+        from services.date_control_service import date_control
+        from datetime import datetime, date, timedelta
 
-        # 1. Get saved tracked ledger IDs (fallback to all expense account IDs if empty)
-        tracked_ids = getattr(self, "tracked_ledger_ids", [])
-        if not tracked_ids:
-            tracked_ids = self._load_tracked_ledgers()
-        if not tracked_ids:
-            rows = db.fetch_all("SELECT id FROM accounts WHERE company_id = ? AND (LOWER(account_group) LIKE '%expense%' OR LOWER(account_group) LIKE '%direct%' OR LOWER(account_group) LIKE '%indirect%')", (self.company_id,))
-            tracked_ids = [r['id'] for r in rows]
+        # 1. Determine effective date range from dropdown selection
+        period_choice = self.period_var.get() if hasattr(self, 'period_var') else 'This Month'
 
+        if period_choice == 'This Month':
+            from_d, to_d = date_control.period(self.company_id)
+        elif period_choice == 'Today':
+            from_d = to_d = date.today()
+        elif period_choice == 'This Year':
+            from_d, to_d = date_control.company_financial_year(self.company_id)
+        elif period_choice == 'This Week':
+            ref_day = date_control.single_date(self.company_id) if date_control.has_single_date else date.today()
+            start = ref_day - timedelta(days=ref_day.weekday())
+            end = start + timedelta(days=6)
+            from_d, to_d = start, end
+        else:
+            # fallback to global period
+            from_d, to_d = date_control.period(self.company_id)
+
+        # Helper to parse any date string from DB to datetime.date
+        def parse_db_date(val):
+            if isinstance(val, date):
+                return val
+            if not val:
+                return None
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+                try:
+                    return datetime.strptime(str(val).strip(), fmt).date()
+                except ValueError:
+                    continue
+            return None
+
+        # 2. Fetch vouchers with details for expense ledgers (no date filter in SQL)
+        # Determine voucher date column name
+        v_cols = [r['name'] for r in db.fetch_all("PRAGMA table_info(vouchers)")]
+        date_col = "v.voucher_date" if "voucher_date" in v_cols else "v.date"
+
+        query = f"""
+            SELECT 
+                a.id AS account_id,
+                a.name AS account_name,
+                vd.debit_amount,
+                {date_col} AS v_date
+            FROM voucher_details vd
+            JOIN vouchers v ON vd.voucher_id = v.id
+            JOIN accounts a ON vd.account_id = a.id
+            WHERE a.company_id = ?
+              AND (
+                  LOWER(a.account_group) LIKE '%expense%' 
+                  OR LOWER(a.account_group) LIKE '%direct%' 
+                  OR LOWER(a.account_group) LIKE '%indirect%'
+                  OR LOWER(a.account_group) LIKE '%myxp%'
+              )
+              AND LOWER(a.account_group) NOT LIKE '%income%'
+        """
+        raw_rows = db.fetch_all(query, (self.company_id,))
+
+        # 3. Strict Python-side Date Range Filtering (Zero format mismatch risk)
+        ledger_totals = {}
+        for row in raw_rows:
+            d = dict(row)
+            v_day = parse_db_date(d.get('v_date'))
+            if v_day and from_d <= v_day <= to_d:
+                acc_name = d.get('account_name')
+                amt = float(d.get('debit_amount') or 0.0)
+                ledger_totals[acc_name] = ledger_totals.get(acc_name, 0.0) + amt
+
+        # 4. Prepare sorted items
         items = []
-        total_spent = 0.0
+        for name, amt in sorted(ledger_totals.items(), key=lambda x: x[1], reverse=True):
+            if amt > 0:
+                items.append({'name': name, 'amount': amt})
 
-        if tracked_ids:
-            placeholders = ",".join(["?"] * len(tracked_ids))
-            query = f"""
-                SELECT 
-                    a.id,
-                    a.name,
-                    COALESCE(SUM(vd.debit_amount), 0.0) AS spent
-                FROM accounts a
-                LEFT JOIN voucher_details vd ON a.id = vd.account_id
-                WHERE a.id IN ({placeholders}) AND a.company_id = ?
-                GROUP BY a.id, a.name
-                ORDER BY spent DESC, a.name ASC
-            """
-            params = tuple(tracked_ids) + (self.company_id,)
-            rows = db.fetch_all(query, params)
-            for r in rows:
-                d = dict(r)
-                amt = float(d.get('spent') or 0.0)
-                total_spent += amt
-                items.append({'id': d['id'], 'name': d['name'], 'amount': amt})
+        total_spent = sum(it['amount'] for it in items)
 
-        # 2. Update Top 3 Stat Chips
-        self.total_expenses_lbl.configure(text=f"₹ {total_spent:,.2f}")
+        # 5. Update Top Stat labels
+        fmt = f"₹ {total_spent:,.2f}"
+        self.total_expenses_lbl.configure(text=fmt)
+        # chip_value_labels order: Total Expenses, Today's Expenses, This Month's Expenses
+        if hasattr(self, 'chip_value_labels') and len(self.chip_value_labels) >= 3:
+            self.chip_value_labels[0].configure(text=fmt)      # Total Expenses
+            self.chip_value_labels[2].configure(text=fmt)      # This Month's Expenses
 
-        # 3. Dynamic Progress Rows in Left Box
+        # 6. Dynamic Progress Rows in Left Box
         for w in self.cat_frame.winfo_children():
             w.destroy()
 
         palette = ["#10B981", "#3B82F6", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#EF4444"]
 
-        # Get theme-aware colors
+        # Theme-aware colors
         is_dark = ctk.get_appearance_mode() == "Dark"
         text_primary = config.COLOR_TEXT_PRIMARY if is_dark else config.LIGHT_TEXT_PRIMARY
         text_secondary = config.COLOR_TEXT_SECONDARY if is_dark else config.LIGHT_TEXT_SECONDARY
@@ -616,12 +665,11 @@ class DashboardFrame(ctk.CTkFrame):
 
                 ctk.CTkLabel(row, text=f"{pct:.0f}%", font=ctk.CTkFont(size=10), text_color=text_muted, width=40, anchor="e").pack(side="left")
 
-        # 4. Donut Chart & Legend in Right Box
+        # 7. Donut Chart & Legend in Right Box
         self.ax.clear()
         self.fig.patch.set_facecolor(chart_bg)
         self.ax.set_facecolor(chart_bg)
 
-        # Only pass slices that have spent > 0
         active_items = [it for it in items if it['amount'] > 0]
         if active_items and total_spent > 0:
             sizes = [it['amount'] for it in active_items]
@@ -635,7 +683,7 @@ class DashboardFrame(ctk.CTkFrame):
 
         self.canvas.draw()
 
-        # 5. Legend in Right Box
+        # 8. Legend in Right Box
         for widget in self.legend_frame.winfo_children():
             widget.destroy()
         if active_items and total_spent > 0:
@@ -1229,9 +1277,9 @@ class ManageExpenseLedgersDialog(ctk.CTkToplevel):
                 WHERE company_id = ?
                   AND (
                       LOWER(account_group) LIKE '%expense%'
-                      OR LOWER(account_group) LIKE '%direct expense%'
-                      OR LOWER(account_group) LIKE '%indirect expense%'
-                      OR LOWER(name) IN ('food', 'fuel', 'rent', 'alka exp', 'office expense', 'electricity')
+                      OR LOWER(account_group) LIKE '%direct%'
+                      OR LOWER(account_group) LIKE '%indirect%'
+                      OR LOWER(account_group) LIKE '%myxp%'
                   )
                   AND LOWER(account_group) NOT LIKE '%income%'
                 ORDER BY account_group ASC, name ASC

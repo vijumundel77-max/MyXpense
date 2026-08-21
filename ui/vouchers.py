@@ -99,9 +99,9 @@ class VouchersFrame(ctk.CTkFrame):
         self._saving = False
         self._pending_after: Optional[str] = None
 
-        # Main container with padding
+        # Main container with compact padding
         self.main_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
-        self.main_frame.pack(fill="both", expand=True, padx=24, pady=(24, 16))
+        self.main_frame.pack(fill="both", expand=True, padx=12, pady=(8, 4))
 
         self._build_header()
         self._build_voucher_meta_card()
@@ -176,8 +176,8 @@ class VouchersFrame(ctk.CTkFrame):
     # Top Header
     # ------------------------------------------------------------------ #
     def _build_header(self) -> None:
-        header = ctk.CTkFrame(self.main_frame, fg_color="transparent", height=44)
-        header.pack(fill="x", pady=(0, 16))
+        header = ctk.CTkFrame(self.main_frame, fg_color="transparent", height=36)
+        header.pack(fill="x", pady=(4, 2))
         header.pack_propagate(False)
 
         # Left: Title + Breadcrumbs
@@ -223,14 +223,14 @@ class VouchersFrame(ctk.CTkFrame):
             border_width=1,
             border_color=config.VOUCHER_CARD_BORDER,
         )
-        self.meta_card.pack(fill="x", pady=(0, 16))
+        self.meta_card.pack(fill="x", pady=(2, 4))
         self.meta_card.grid_columnconfigure(0, weight=1)
         self.meta_card.grid_columnconfigure(1, weight=1)
         self.meta_card.grid_columnconfigure(2, weight=1)
         self.meta_card.grid_columnconfigure(3, weight=1)
 
-        pad_x = 16
-        pad_y = 14
+        pad_x = 10
+        pad_y = 6
 
         # Voucher Type
         self._build_meta_field(0, "Voucher Type", self._build_type_combo_widget)
@@ -248,55 +248,43 @@ class VouchersFrame(ctk.CTkFrame):
 
         ctk.CTkLabel(
             party_holder, text="Party A/C Name",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=10),
             text_color="#64748B", anchor="w",
         ).pack(anchor="w")
 
         party_row = ctk.CTkFrame(party_holder, fg_color="transparent")
-        party_row.pack(fill="x", pady=(4, 0))
+        party_row.pack(fill="x", pady=(1, 0))
 
         self.party_picker = LedgerPicker(
-            party_row, self.company_id, width=200,
+            party_row, self.company_id, width=180,
             groups=PARTY_GROUPS, on_selected=lambda _id: self._on_party_selected(),
             on_add_new=self._add_ledger_modal,
             placeholder="Select or type party name...",
         )
         self.party_picker.pack(side="left", fill="x", expand=True)
 
-        # Quick create button
-        btn_quick = ctk.CTkButton(
-            party_row, text="+", width=34, height=34,
-            corner_radius=6,
-            fg_color=config.VOUCHER_CARD_BORDER,
-            hover_color=config.COLOR_PRIMARY,
-            text_color=config.VOUCHER_INPUT_TEXT,
-            font=ctk.CTkFont(size=18, weight="bold"),
-            command=self._add_ledger_modal,
-        )
-        btn_quick.pack(side="left", padx=(6, 0))
-
         # Flow hint (row 1, spans columns)
         self.flow_hint = ctk.CTkLabel(
             self.meta_card, text="",
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=9),
             text_color="#64748B", anchor="w",
         )
         self.flow_hint.grid(row=1, column=0, columnspan=4, sticky="ew", padx=pad_x, pady=(0, pad_y))
 
     def _build_meta_field(self, column: int, label: str, builder) -> None:
-        pad_x = 16
-        pad_y = 14
+        pad_x = 10
+        pad_y = 6
         holder = ctk.CTkFrame(self.meta_card, fg_color="transparent")
         holder.grid(row=0, column=column, sticky="ew", padx=(pad_x, 0) if column == 0 else (pad_x, pad_x), pady=pad_y)
         holder.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
             holder, text=label,
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=10),
             text_color="#64748B", anchor="w",
         ).pack(anchor="w")
         widget = builder(holder)
-        widget.pack(fill="x", pady=(4, 0))
+        widget.pack(fill="x", pady=(1, 0))
 
     def _build_type_combo_widget(self, holder) -> ctk.CTkWidget:
         labels = [VOUCHER_TYPE_LABELS[t] for t in VOUCHER_TYPES]
@@ -362,17 +350,18 @@ class VouchersFrame(ctk.CTkFrame):
             border_width=1,
             border_color=config.VOUCHER_CARD_BORDER,
         )
-        self.grid_card.pack(fill="both", expand=True, pady=(0, 16))
+        self.grid_card.pack(fill="x", pady=(2, 4))
 
-        # Scrollable area
+        # Scrollable area - compact height for 2-3 rows
         self.grid_scroll = ctk.CTkScrollableFrame(
             self.grid_card,
             fg_color="transparent",
             corner_radius=0,
             scrollbar_button_color=config.VOUCHER_CARD_BORDER,
             scrollbar_button_hover_color=config.COLOR_PRIMARY,
+            height=120,
         )
-        self.grid_scroll.pack(fill="both", expand=True, padx=8, pady=8)
+        self.grid_scroll.pack(fill="x", padx=6, pady=4)
         self.grid_scroll.grid_columnconfigure(0, weight=1)
 
         self.grid_rows_frame = ctk.CTkFrame(self.grid_scroll, fg_color="transparent")
@@ -390,7 +379,7 @@ class VouchersFrame(ctk.CTkFrame):
         self._add_row()  # Row 1 (debit side)
         self._add_row(to_line=True)  # Row 2 (credit/To line)
 
-        # Row controls
+        # Row controls - compact
         self._build_row_controls()
 
     def _build_grid_header(self) -> None:
@@ -420,8 +409,8 @@ class VouchersFrame(ctk.CTkFrame):
         ).grid(row=0, column=3, sticky="e", padx=(0, 24), pady=4)
 
     def _build_row_controls(self) -> None:
-        controls = ctk.CTkFrame(self.grid_card, fg_color="transparent", height=48)
-        controls.pack(fill="x", padx=16, pady=(0, 12))
+        controls = ctk.CTkFrame(self.grid_card, fg_color="transparent", height=30)
+        controls.pack(fill="x", padx=8, pady=(3, 3))
         controls.pack_propagate(False)
 
         # Center aligned
@@ -430,28 +419,28 @@ class VouchersFrame(ctk.CTkFrame):
 
         self.btn_add_row = ctk.CTkButton(
             center, text="+ Add Row",
-            font=ctk.CTkFont(size=12, weight="bold"),
+            font=ctk.CTkFont(size=10, weight="bold"),
             fg_color="transparent",
             border_width=1,
             border_color=config.VOUCHER_CARD_BORDER,
             text_color=config.VOUCHER_INPUT_TEXT,
             corner_radius=6,
-            height=32,
-            width=110,
+            height=24,
+            width=90,
             command=self._add_row_manual,
         )
-        self.btn_add_row.pack(side="left", padx=(0, 8))
+        self.btn_add_row.pack(side="left", padx=(0, 4))
 
         self.btn_remove_row = ctk.CTkButton(
             center, text="🗑 Remove Row",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=10),
             fg_color="transparent",
             border_width=1,
             border_color=config.VOUCHER_CARD_BORDER,
             text_color=config.VOUCHER_INPUT_TEXT,
             corner_radius=6,
-            height=32,
-            width=120,
+            height=24,
+            width=100,
             command=self._remove_last_row,
         )
         self.btn_remove_row.pack(side="left")
@@ -517,22 +506,9 @@ class VouchersFrame(ctk.CTkFrame):
         picker.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=4)
         row["picker"] = picker
 
-        # Quick add button inside particulars
-        btn_add = ctk.CTkButton(
-            particulars, text="+", width=28, height=28,
-            corner_radius=6,
-            fg_color=config.COLOR_PRIMARY,
-            hover_color=config.COLOR_PRIMARY_HOVER,
-            text_color="#FFFFFF",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            command=lambda r=row: self._add_ledger_modal_for_row(r),
-        )
-        btn_add.grid(row=0, column=2, padx=(0, 8))
-        row["btn_quick_add"] = btn_add
-
         # Debit / Credit amount entries
-        debit_var = tk.StringVar(value=debit)
-        credit_var = tk.StringVar(value=credit)
+        debit_var = tk.StringVar(value="0.00")
+        credit_var = tk.StringVar(value="0.00")
         debit_var.trace_add("write", lambda *_: self._update_balance())
         credit_var.trace_add("write", lambda *_: self._update_balance())
 
@@ -863,74 +839,61 @@ class VouchersFrame(ctk.CTkFrame):
     # Summary Card
     # ------------------------------------------------------------------ #
     def _build_summary_card(self) -> None:
+        """Ultra-compact single-row summary strip (height 44px)."""
         self.summary_card = ctk.CTkFrame(
             self.main_frame,
             fg_color=config.VOUCHER_CARD_BG,
-            corner_radius=10,
+            corner_radius=8,
             border_width=1,
             border_color=config.VOUCHER_CARD_BORDER,
         )
-        self.summary_card.pack(fill="x", pady=(0, 16))
+        self.summary_card.pack(fill="x", padx=16, pady=(2, 4))
 
-        inner = ctk.CTkFrame(self.summary_card, fg_color="transparent")
-        inner.pack(fill="x", padx=20, pady=16)
-        inner.grid_columnconfigure(0, weight=1)
-        inner.grid_columnconfigure(1, weight=1)
-        inner.grid_columnconfigure(2, weight=1)
-
-        # Total Debit column
-        self._build_summary_column(inner, 0, "↓", "Total Debit",
-                                    COLOR_DEBIT, "debit")
-
-        # Total Credit column
-        self._build_summary_column(inner, 1, "↑", "Total Credit",
-                                    COLOR_CREDIT, "credit")
-
-        # Difference column
-        self._build_summary_column(inner, 2, "⚖", "Difference",
-                                    COLOR_DIFF, "diff")
-
-    def _build_summary_column(self, parent, column: int, icon: str, label: str,
-                               color: str, attr: str) -> None:
-        col_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        col_frame.grid(row=0, column=column, sticky="nsew", padx=12)
-        col_frame.grid_columnconfigure(0, weight=1)
-
-        # Icon badge
-        badge = ctk.CTkLabel(
-            col_frame, text=icon,
-            font=ctk.CTkFont(size=20),
-            text_color=color,
-            fg_color=self._tint_for_summary(color),
-            corner_radius=24,
-            width=48, height=48,
+        summary_frame = ctk.CTkFrame(
+            self.summary_card,
+            fg_color=config.VOUCHER_CARD_BG,
+            corner_radius=8,
+            height=44,
+            border_width=1,
+            border_color=config.VOUCHER_CARD_BORDER,
         )
-        badge.pack(pady=(0, 8))
+        summary_frame.pack(fill="x", padx=4, pady=2)
+        summary_frame.pack_propagate(False)
 
-        # Label
-        ctk.CTkLabel(
-            col_frame, text=label,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#64748B",
-        ).pack()
+        # 3 Equal Grid Columns
+        summary_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
-        # Value
-        value_label = ctk.CTkLabel(
-            col_frame, text="0.00",
-            font=ctk.CTkFont(size=18, weight="bold"),
-            text_color=color,
-        )
-        value_label.pack(pady=(4, 0))
+        # Total Debit Column
+        col1 = ctk.CTkFrame(summary_frame, fg_color="transparent")
+        col1.grid(row=0, column=0, pady=6)
+        ctk.CTkLabel(col1, text="↓", text_color=COLOR_DEBIT, font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(col1, text="Total Debit:", font=ctk.CTkFont(size=11), text_color="#8DA4D0").pack(side="left", padx=(0, 4))
+        self.total_debit_lbl = ctk.CTkLabel(col1, text="0.00", font=ctk.CTkFont(size=13, weight="bold"), text_color=COLOR_DEBIT)
+        self.total_debit_lbl.pack(side="left")
 
-        setattr(self, f"summary_{attr}_label", value_label)
+        # Total Credit Column
+        col2 = ctk.CTkFrame(summary_frame, fg_color="transparent")
+        col2.grid(row=0, column=1, pady=6)
+        ctk.CTkLabel(col2, text="↑", text_color=COLOR_CREDIT, font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(col2, text="Total Credit:", font=ctk.CTkFont(size=11), text_color="#8DA4D0").pack(side="left", padx=(0, 4))
+        self.total_credit_lbl = ctk.CTkLabel(col2, text="0.00", font=ctk.CTkFont(size=13, weight="bold"), text_color=COLOR_CREDIT)
+        self.total_credit_lbl.pack(side="left")
 
+        # Difference Column
+        col3 = ctk.CTkFrame(summary_frame, fg_color="transparent")
+        col3.grid(row=0, column=2, pady=6)
+        ctk.CTkLabel(col3, text="⚖", text_color=COLOR_DIFF, font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(col3, text="Difference:", font=ctk.CTkFont(size=11), text_color="#8DA4D0").pack(side="left", padx=(0, 4))
+        self.diff_lbl = ctk.CTkLabel(col3, text="0.00", font=ctk.CTkFont(size=13, weight="bold"), text_color=COLOR_DIFF)
+        self.diff_lbl.pack(side="left")
+
+    # _tint_for_summary kept for compatibility if used elsewhere
     def _tint_for_summary(self, hex_color: str) -> str:
         """Tint toward card background for subtle badge."""
         hex_color = hex_color.lstrip('#')
         r = int(hex_color[0:2], 16)
         g = int(hex_color[2:4], 16)
         b = int(hex_color[4:6], 16)
-        # Tint toward VOUCHER_CARD_BG (#10192E)
         bg_r, bg_g, bg_b = 0x10, 0x19, 0x2E
         factor = 0.15
         r = int(r * factor + bg_r * (1 - factor))
@@ -942,35 +905,34 @@ class VouchersFrame(ctk.CTkFrame):
     # Narration Card
     # ------------------------------------------------------------------ #
     def _build_narration_card(self) -> None:
-        self.narration_card = ctk.CTkFrame(
-            self.main_frame,
-            fg_color=config.VOUCHER_CARD_BG,
-            corner_radius=10,
-            border_width=1,
-            border_color=config.VOUCHER_CARD_BORDER,
-        )
-        self.narration_card.pack(fill="x", pady=(0, 16))
-
-        inner = ctk.CTkFrame(self.narration_card, fg_color="transparent")
-        inner.pack(fill="x", padx=20, pady=16)
+        """Narration box with proper focus/click handling."""
+        narr_container = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        narr_container.pack(fill="x", padx=16, pady=(2, 6))
 
         ctk.CTkLabel(
-            inner, text="Narration (optional)",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            text_color="#64748B",
-        ).pack(anchor="w", pady=(0, 8))
+            narr_container, text="Narration (optional)",
+            font=ctk.CTkFont(size=11), text_color="#8DA4D0",
+        ).pack(anchor="w", pady=(0, 2))
 
         self.narration_var = tk.StringVar()
         self.narration_entry = ctk.CTkEntry(
-            inner, textvariable=self.narration_var,
-            corner_radius=8,
-            font=ctk.CTkFont(size=config.FONT_BODY_SIZE),
-            fg_color=config.VOUCHER_INPUT_BG,
-            border_color=config.VOUCHER_INPUT_BORDER,
-            text_color=config.VOUCHER_INPUT_TEXT,
-            height=44,
+            narr_container,
+            textvariable=self.narration_var,
+            placeholder_text="Enter narration...",
+            height=32,
+            fg_color="#0B1329",
+            border_color="#1B2848",
+            border_width=1,
+            text_color="#FFFFFF",
+            placeholder_text_color="#64748B",
+            font=ctk.CTkFont(size=12),
+            state="normal",
         )
-        self.narration_entry.pack(fill="x")
+        self.narration_entry.pack(fill="x", expand=True)
+
+        # Explicit click focus bind
+        self.narration_entry.bind("<Button-1>", lambda e: self.narration_entry.focus_set())
+
         self.narration_entry.bind("<Return>", self._on_narration_return)
         self.narration_entry.bind("<Tab>", self._on_narration_tab)
 
@@ -985,108 +947,104 @@ class VouchersFrame(ctk.CTkFrame):
             border_width=1,
             border_color=config.VOUCHER_CARD_BORDER,
         )
-        self.action_bar.pack(fill="x", pady=(0, 16))
+        self.action_bar.pack(fill="x", pady=(4, 6))
 
         inner = ctk.CTkFrame(self.action_bar, fg_color="transparent")
-        inner.pack(fill="x", padx=20, pady=14)
+        inner.pack(fill="x", padx=12, pady=4)
 
-        # Left group: primary actions
-        left_group = ctk.CTkFrame(inner, fg_color="transparent")
-        left_group.pack(side="left")
+        # Single horizontal row with all buttons
+        btn_row = ctk.CTkFrame(inner, fg_color="transparent")
+        btn_row.pack(fill="x")
 
         # Save (F5) - Solid Blue
         self.btn_save = ctk.CTkButton(
-            left_group, text="💾 Save (F5)",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            btn_row, text="💾 Save (F5)",
+            font=ctk.CTkFont(size=11, weight="bold"),
             fg_color=config.COLOR_PRIMARY,
             hover_color=config.COLOR_PRIMARY_HOVER,
             text_color="#FFFFFF",
-            corner_radius=8,
-            height=38,
-            width=130,
+            corner_radius=6,
+            height=30,
+            width=110,
             command=self._save_voucher,
         )
-        self.btn_save.pack(side="left", padx=(0, 8))
+        self.btn_save.pack(side="left", padx=(0, 4))
         self.btn_save.bind("<Return>", lambda _e: self._save_voucher() or "break")
         self.btn_save.bind("<space>", lambda _e: self._save_voucher() or "break")
 
-        # Save & New (Ctrl+N) - Dark Blue with border
+        # Save & New (Ctrl+N) - Deep Navy
         self.btn_save_new = ctk.CTkButton(
-            left_group, text="💾 Save & New (Ctrl+N)",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            btn_row, text="💾 Save & New (Ctrl+N)",
+            font=ctk.CTkFont(size=11, weight="bold"),
             fg_color="#162A52",
             hover_color="#1E3A5F",
             border_width=1,
             border_color=config.COLOR_PRIMARY_HOVER,
             text_color="#BFDBFE",
-            corner_radius=8,
-            height=38,
-            width=160,
+            corner_radius=6,
+            height=30,
+            width=135,
             command=self._save_and_new,
         )
-        self.btn_save_new.pack(side="left", padx=(0, 8))
+        self.btn_save_new.pack(side="left", padx=(0, 4))
 
         # Clear - Dark Navy
         self.btn_clear = ctk.CTkButton(
-            left_group, text="↻ Clear",
-            font=ctk.CTkFont(size=13),
+            btn_row, text="↻ Clear",
+            font=ctk.CTkFont(size=11),
             fg_color="#16223E",
             hover_color="#1B2848",
             text_color="#94A3B8",
-            corner_radius=8,
-            height=38,
-            width=100,
+            corner_radius=6,
+            height=30,
+            width=80,
             command=self._clear_form,
         )
-        self.btn_clear.pack(side="left", padx=(0, 8))
+        self.btn_clear.pack(side="left", padx=(0, 4))
 
         # Cancel (Esc) - Dark Navy
         self.btn_cancel = ctk.CTkButton(
-            left_group, text="✕ Cancel (Esc)",
-            font=ctk.CTkFont(size=13),
+            btn_row, text="✕ Cancel (Esc)",
+            font=ctk.CTkFont(size=11),
             fg_color="#16223E",
             hover_color="#1B2848",
             text_color="#94A3B8",
-            corner_radius=8,
-            height=38,
-            width=120,
+            corner_radius=6,
+            height=30,
+            width=100,
             command=self._cancel_form,
         )
-        self.btn_cancel.pack(side="left", padx=(0, 8))
-
-        # Right group: secondary actions
-        right_group = ctk.CTkFrame(inner, fg_color="transparent")
-        right_group.pack(side="right")
+        self.btn_cancel.pack(side="left", padx=(0, 4))
 
         # Voucher Register - Dark Navy
         self.btn_register = ctk.CTkButton(
-            right_group, text="📖 Voucher Register",
-            font=ctk.CTkFont(size=13),
+            btn_row, text="📖 Voucher Register",
+            font=ctk.CTkFont(size=11),
             fg_color="#16223E",
             hover_color="#1B2848",
             text_color="#94A3B8",
-            corner_radius=8,
-            height=38,
-            width=150,
+            corner_radius=6,
+            height=30,
+            width=130,
             command=self._open_register,
         )
-        self.btn_register.pack(side="left", padx=(0, 8))
+        self.btn_register.pack(side="left", padx=(0, 4))
 
-        # Cancel Voucher - Red border/accent
+        # Cancel Voucher - Right aligned, Red border/accent
         self.btn_cancel_voucher = ctk.CTkButton(
-            right_group, text="🚫 Cancel Voucher",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            btn_row, text="🚫 Cancel Voucher",
+            font=ctk.CTkFont(size=11, weight="bold"),
             fg_color="#3B1D28",
             hover_color="#4A1D28",
             border_width=1,
             border_color=COLOR_CANCEL,
             text_color=COLOR_CANCEL,
-            corner_radius=8,
-            height=38,
-            width=150,
+            corner_radius=6,
+            height=30,
+            width=130,
             command=self._cancel_selected_voucher,
         )
-        self.btn_cancel_voucher.pack(side="left")
+        self.btn_cancel_voucher.pack(side="right")
 
     # ------------------------------------------------------------------ #
     # Status Bar
@@ -1161,14 +1119,15 @@ class VouchersFrame(ctk.CTkFrame):
         debit, credit = self._totals()
         difference = round(debit - credit, 2)
 
-        self.summary_debit_label.configure(text=_fmt(debit))
-        self.summary_credit_label.configure(text=_fmt(credit))
+        self.total_debit_lbl.configure(text=_fmt(debit))
+        self.total_credit_lbl.configure(text=_fmt(credit))
 
-        if attr := getattr(self, "summary_diff_label", None):
+        diff_lbl = getattr(self, "diff_lbl", None)
+        if diff_lbl is not None:
             if difference == 0 and (debit or credit):
-                attr.configure(text="0.00", text_color=COLOR_CREDIT)
+                diff_lbl.configure(text="0.00", text_color=COLOR_CREDIT)
             else:
-                attr.configure(text=_fmt(difference), text_color=COLOR_DIFF if difference > 0 else COLOR_DEBIT)
+                diff_lbl.configure(text=_fmt(difference), text_color=COLOR_DIFF if difference > 0 else COLOR_DEBIT)
 
     def _totals(self) -> tuple:
         debit = 0.0

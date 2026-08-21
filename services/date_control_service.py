@@ -21,6 +21,7 @@ displayed.
 """
 from __future__ import annotations
 
+import calendar
 from datetime import date, datetime
 from typing import Any, Dict, Optional, Tuple
 
@@ -37,6 +38,16 @@ class DateControlService:
         self._period_to: Optional[date] = None
         self._single_date: Optional[date] = None
         self._company_id: Optional[int] = None
+
+    # ------------------------------------------------------------------ #
+    # helper: current month bounds (1st day -> last day)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _month_bounds(day: Optional[date] = None) -> Tuple[date, date]:
+        """Return (first_day_of_month, last_day_of_month) for the given date."""
+        target = day or date.today()
+        _, last_day = calendar.monthrange(target.year, target.month)
+        return target.replace(day=1), target.replace(day=last_day)
 
     # ------------------------------------------------------------------ #
     # company financial year (default valid range)
@@ -150,11 +161,10 @@ class DateControlService:
         return self._single_date is not None
 
     def period(self, company_id: int) -> Tuple[date, date]:
-        """Current period, defaulting to today (existing app behavior)."""
+        """Current period, defaulting to 1st -> last day of the current month."""
         if self.has_period:
             return self._period_from, self._period_to  # type: ignore[return-value]
-        today = date.today()
-        return today, today
+        return self._month_bounds(date.today())
 
     def single_date(self, company_id: int) -> date:
         """Current single date, defaulting to today."""
@@ -200,32 +210,36 @@ class DateControlService:
             return
         self.set_company(company_id)
 
+        # Resolve effective from/to (user-selected or current month bounds)
+        effective_from, effective_to = self.period(company_id)
+        effective_single = self.single_date(company_id)
+
         used_hook = False
         period_hook = getattr(view, "on_global_date_period", None)
         if callable(period_hook):
             try:
-                period_hook(self._period_from, self._period_to)
+                period_hook(effective_from, effective_to)
                 used_hook = True
             except Exception:
                 pass
         else:
             # Shared adapter: screens that expose from/to date vars.
-            if hasattr(view, "from_date_var") and self._period_from is not None:
-                self._set_string_var(view, "from_date_var", self._period_from)
-            if hasattr(view, "to_date_var") and self._period_to is not None:
-                self._set_string_var(view, "to_date_var", self._period_to)
+            if hasattr(view, "from_date_var"):
+                self._set_string_var(view, "from_date_var", effective_from)
+            if hasattr(view, "to_date_var"):
+                self._set_string_var(view, "to_date_var", effective_to)
 
         single_hook = getattr(view, "on_global_single_date", None)
         if callable(single_hook):
             try:
-                single_hook(self._single_date)
+                single_hook(effective_single)
                 used_hook = True
             except Exception:
                 pass
-        elif hasattr(view, "single_date_var") and self._single_date is not None:
-            self._set_string_var(view, "single_date_var", self._single_date)
-        elif hasattr(view, "as_on_date_var") and self._single_date is not None:
-            self._set_string_var(view, "as_on_date_var", self._single_date)
+        elif hasattr(view, "single_date_var"):
+            self._set_string_var(view, "single_date_var", effective_single)
+        elif hasattr(view, "as_on_date_var"):
+            self._set_string_var(view, "as_on_date_var", effective_single)
 
         # A screen with an explicit hook already regenerated its data; only
         # fall through to the generic refresh when the shared adapter set

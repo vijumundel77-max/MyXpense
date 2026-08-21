@@ -227,6 +227,7 @@ class DashboardService:
               AND v.status != ?
               AND LOWER(a.account_group) IN ({placeholders})
               AND a.is_active = 1
+              AND LOWER(v.voucher_type) <> 'contra'
               AND v.voucher_date >= ?
               AND v.voucher_date <= ?
             ORDER BY v.voucher_date, v.id, vd.id

@@ -145,14 +145,9 @@ class DatePeriodDialog(_BaseDateDialog):
         self.on_apply_cb = on_apply
         company_id = _resolve_company_id(parent)
         fy_start, fy_end = date_control.company_financial_year(company_id)
-        # Defaults: existing/current app behavior (today..today), but always
-        # inside the company's Financial Year when today is out of range.
-        today = date.today()
-        default_from = max(fy_start, today) if today < fy_start else today
-        default_to = min(fy_end, today) if today > fy_end else today
         self._min_date, self._max_date = fy_start, fy_end
-        self.from_date = default_from
-        self.to_date = default_to
+        # Use the global date_control period (monthly session) as defaults
+        self.from_date, self.to_date = date_control.period(company_id)
         super().__init__(parent, "Date Period — Alt+F2",
                          focus_date_entry=focus_date_entry)
 
