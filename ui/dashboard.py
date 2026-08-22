@@ -261,15 +261,15 @@ class DashboardFrame(ctk.CTkFrame):
             card = ctk.CTkFrame(
                 row1, fg_color=config.COLOR_BG_SECONDARY, corner_radius=10,
                 border_width=1, border_color=config.COLOR_CARD_BORDER,
-                cursor="hand2" if key in {"bank_balance", "receivables", "payables"} else "",
+                cursor="hand2",
                 height=72,
             )
             card.grid(row=0, column=idx, sticky="nsew", padx=(0, 4))
             card.grid_propagate(False)
             self.kpi_cards_row1[key] = card
 
-            if key in {"bank_balance", "receivables", "payables"}:
-                self._make_card_clickable(card, key)
+            # make every card in row1 clickable
+            self._make_clickable(card, lambda k=key: self._on_card_click(k))
 
             # Grid inside card: column 0 badge, column 1 info
             card.grid_columnconfigure(0, weight=0)
@@ -330,15 +330,15 @@ class DashboardFrame(ctk.CTkFrame):
             card = ctk.CTkFrame(
                 row2, fg_color=config.COLOR_BG_SECONDARY, corner_radius=10,
                 border_width=1, border_color=config.COLOR_CARD_BORDER,
-                cursor="hand2" if key in {"month_receipts", "month_payments"} else "",
+                cursor="hand2",
                 height=72,
             )
             card.grid(row=0, column=idx, sticky="nsew", padx=(0, 4))
             card.grid_propagate(False)
             self.kpi_cards_row2[key] = card
 
-            if key in {"month_receipts", "month_payments"}:
-                self._make_card_clickable(card, key)
+            # make every card in row2 clickable
+            self._make_clickable(card, lambda k=key: self._on_card_click(k))
 
             card.grid_columnconfigure(0, weight=0)
             card.grid_columnconfigure(1, weight=1)
@@ -444,10 +444,12 @@ class DashboardFrame(ctk.CTkFrame):
             ("This Month's Expenses", config.COLOR_WARNING),
         ]
         self.chip_value_labels = []
+        self.expense_chip_frames = []
         for label_text, color in chip_data:
             chip = ctk.CTkFrame(chips_frame, fg_color=self._tint_color(color, 0.15),
                                 corner_radius=8, border_width=1, border_color=color)
             chip.pack(side="left", padx=(0, config.SPACING_SM), fill="y")
+            self.expense_chip_frames.append(chip)
             val_lbl = ctk.CTkLabel(
                 chip, text="₹ 0.00", font=ctk.CTkFont(size=12, weight="bold"),
                 text_color=color,
@@ -458,6 +460,9 @@ class DashboardFrame(ctk.CTkFrame):
                 chip, text=label_text, font=ctk.CTkFont(size=9),
                 text_color=config.COLOR_TEXT_SECONDARY,
             ).pack(padx=config.SPACING_MD, pady=(0, config.SPACING_XS))
+        # make expense chips clickable
+        for chip in self.expense_chip_frames:
+            self._make_clickable(chip, self._show_expenses_modal)
 
         # Category breakdown with progress bars
         self.category_rows = []
@@ -751,36 +756,83 @@ class DashboardFrame(ctk.CTkFrame):
         ).pack(fill="x", padx=config.SPACING_XL, pady=(0, config.SPACING_SM))
 
     # ------------------------------------------------------------------ #
-    # drill-down interaction
+    # recursive click / hover binding helper
     # ------------------------------------------------------------------ #
-    def _make_card_clickable(self, card, key: str) -> None:
-        card.configure(cursor="hand2")
-        for widget in [card] + list(card.winfo_children()):
+    def _make_clickable(self, widget, callback_func):
+        """Recursively bind left‑click and hover to widget and all descendants."""
+        widget.bind("<Button-1>", lambda e: callback_func())
+        widget.configure(cursor="hand2")
+        widget.bind("<Enter>", lambda e: self._on_widget_hover(widget, True))
+        widget.bind("<Leave>", lambda e: self._on_widget_hover(widget, False))
+        for child in widget.winfo_children():
             try:
-                widget.bind("<Button-1>", lambda e, k=key: self._on_card_click(k))
-                widget.bind("<Enter>", lambda e, k=key: self._on_card_hover(k, True))
-                widget.bind("<Leave>", lambda e, k=key: self._on_card_hover(k, False))
+                self._make_clickable(child, callback_func)
             except Exception:
                 pass
 
-    def _on_card_hover(self, key: str, hovered: bool) -> None:
-        card = self.kpi_cards_row1.get(key) or self.kpi_cards_row2.get(key)
-        if card is None:
-            return
+    def _on_widget_hover(self, widget, hovered: bool) -> None:
         try:
             is_dark = ctk.get_appearance_mode() == "Dark"
             if hovered:
-                card.configure(border_color=config.COLOR_PRIMARY,
-                               fg_color="#112244" if is_dark else "#DBEAFE")
+                widget.configure(border_color=config.COLOR_PRIMARY,
+                                 fg_color="#112244" if is_dark else "#DBEAFE")
             else:
-                card.configure(border_color=config.COLOR_CARD_BORDER,
-                               fg_color=config.COLOR_BG_SECONDARY)
+                widget.configure(border_color=config.COLOR_CARD_BORDER,
+                                 fg_color=config.COLOR_BG_SECONDARY)
         except Exception:
             pass
 
+    # ------------------------------------------------------------------ #
+    # drill-down interaction
+    # ------------------------------------------------------------------ #
     def _on_card_click(self, key: str) -> None:
-        title = dict(self.DRILLDOWN_CARDS).get(key, key)
-        self._open_detail(key, title)
+        # map every clickable key to its modal opener
+        modal_map = {
+            "cash_balance": self._show_cash_modal,
+            "bank_balance": self._show_bank_modal,
+            "receivables": self._show_receivables_modal,
+            "payables": self._show_payables_modal,
+            "today_receipts": self._show_today_receipts_modal,
+            "today_payments": self._show_today_payments_modal,
+            "month_receipts": self._show_month_receipts_modal,
+            "month_payments": self._show_month_payments_modal,
+        }
+        func = modal_map.get(key)
+        if func:
+            func()
+        else:
+            # fallback for any future keys
+            title = dict(self.DRILLDOWN_CARDS).get(key, key)
+            self._open_detail(key, title)
+
+    # ---- modal openers -------------------------------------------------
+    def _show_cash_modal(self) -> None:
+        self._open_detail("cash_balance", "Cash Balance")
+
+    def _show_bank_modal(self) -> None:
+        self._open_detail("bank_balance", "Bank Balance")
+
+    def _show_receivables_modal(self) -> None:
+        self._open_detail("receivables", "Receivables")
+
+    def _show_payables_modal(self) -> None:
+        self._open_detail("payables", "Payables")
+
+    def _show_today_receipts_modal(self) -> None:
+        self._open_detail("today_receipts", "Today's Receipts")
+
+    def _show_today_payments_modal(self) -> None:
+        self._open_detail("today_payments", "Today's Payments")
+
+    def _show_month_receipts_modal(self) -> None:
+        self._open_detail("month_receipts", "This Month's Receipts")
+
+    def _show_month_payments_modal(self) -> None:
+        self._open_detail("month_payments", "This Month's Payments")
+
+    def _show_expenses_modal(self) -> None:
+        # reuse the manage expense ledgers dialog as the expenses overview modal
+        self._open_manage_expenses_dialog()
 
     def _open_detail(self, key: str, title: str) -> None:
         detail = DashboardDetailDialog(
@@ -829,7 +881,8 @@ class DashboardFrame(ctk.CTkFrame):
             self.company_id = int(company_id)
         self.data = dashboard_service.get_dashboard(self.company_id, self._global_single_date())
 
-        self.company_label.configure(text=self.data.get('company_name', ''))
+        company_name = self.data.get('company_name', '') or "Company"
+        self.company_label.configure(text=company_name)
 
         # Row 1 KPIs
         for key, label in self.kpi_labels_row1.items():
@@ -843,7 +896,7 @@ class DashboardFrame(ctk.CTkFrame):
         self._sync_date_labels()
         self.status_var.set(
             f"Updated {date.today().strftime(config.DISPLAY_DATE_FORMAT)} — "
-            f"{self.data.get('company_name', '')}"
+            f"{company_name}"
         )
 
     def refresh_theme(self) -> None:
