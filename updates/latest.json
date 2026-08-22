@@ -1,10 +1,10 @@
-﻿{
-    "installer_url":  "https://github.com/vijumundel77-max/MyXpense/releases/download/v1.0.2/ExpenzoSetup-1.0.2.exe",
-    "release_notes":  "",
-    "version":  "1.0.2",
-    "schema_version":  1,
-    "published_at":  "2026-08-22T09:44:38Z",
-    "installer_name":  "ExpenzoSetup-1.0.2.exe",
-    "app":  "Expenzo",
-    "sha256":  "65213d2c4e0a50e892e8d3e45e9bd7475752ea16ffb64964397c4c8d4e6689b3"
+{
+  "schema_version": 1,
+  "app": "Expenzo",
+  "version": "1.0.3",
+  "installer_name": "ExpenzoSetup-1.0.3.exe",
+  "installer_url": "https://github.com/vijumundel77-max/MyXpense/releases/download/v1.0.3/ExpenzoSetup-1.0.3.exe",
+  "release_notes": "",
+  "published_at": "2026-08-22T13:28:59Z",
+  "sha256": "7072d46f5c2d095df4fa9612a85537a35e34b863899ed200b7503b647f02d768"
 }

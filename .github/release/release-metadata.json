@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "app": "Expenzo",
-  "current_version": "1.0.2",
+  "current_version": "1.0.3",
   "releases": [
     {
       "version": "1.0.0",
@@ -26,6 +26,14 @@
       "installer_url": "https://github.com/vijumundel77-max/MyXpense/releases/download/v1.0.2/ExpenzoSetup-1.0.2.exe",
       "release_notes": "## Expenzo 1.0.2\n\nInstaller: `ExpenzoSetup-1.0.2.exe`\n\n### What's new\n- \n\n### Fixes\n- \n",
       "published_at": "2026-08-22T08:28:49Z"
+    },
+    {
+      "version": "1.0.3",
+      "tag": "v1.0.3",
+      "installer_name": "ExpenzoSetup-1.0.3.exe",
+      "installer_url": "https://github.com/vijumundel77-max/MyXpense/releases/download/v1.0.3/ExpenzoSetup-1.0.3.exe",
+      "release_notes": "## Expenzo 1.0.3\n\nInstaller: `ExpenzoSetup-1.0.3.exe`\n\n### What's new\n- \n\n### Fixes\n- \n",
+      "published_at": "2026-08-22T13:28:59Z"
     }
   ]
 }
