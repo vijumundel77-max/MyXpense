@@ -70,41 +70,49 @@ class UpdateManager:
     # ------------------------------------------------------------------ #
     def launch_installer(self, installer_path: Path,
                          close_app: Optional[Callable[[], None]] = None) -> bool:
-        """Launch the downloaded installer and close the app.
+        """Launch the downloaded installer via the detached helper and exit the app.
 
-        The Inno Setup installer (per-user, PrivilegesRequired=lowest) runs
-        without admin.  Its [Run] step relaunches Expenzo after a successful
-        install, so the user is automatically returned to the new version.
-
-        The app is closed only AFTER the installer process has started
-        (otherwise the installer would terminate before it could install).
+        The helper (``services.update_service.apply_update``) waits for the
+        current Expenzo process to terminate, then runs the Inno Setup installer
+        silently.  This method never returns – it calls ``sys.exit(0)`` after
+        spawning the helper.
         """
         path = Path(installer_path)
         if not path.is_file():
             return False
+        # Use the new apply_update flow (works in dev and frozen builds)
         try:
-            # Windows: start the installer detached; it does not need the app
-            # process alive, and the app can exit immediately after.
-            if os.name == "nt":
-                subprocess.Popen(
-                    [str(path)],
-                    cwd=str(path.parent),
-                    close_fds=True,
-                )
-            else:
-                subprocess.Popen(
-                    [str(path)],
-                    cwd=str(path.parent),
-                    start_new_session=True,
-                )
+            update_service.apply_update(path)
         except Exception:
-            # Installer failed to start — current app stays intact.
-            return False
-        if close_app is not None:
+            # If we cannot spawn the helper, fall back to the old direct launch
+            # to keep the app usable.
             try:
-                close_app()
+                if os.name == "nt":
+                    subprocess.Popen(
+                        [str(path)],
+                        cwd=str(path.parent),
+                        close_fds=True,
+                    )
+                else:
+                    subprocess.Popen(
+                        [str(path)],
+                        cwd=str(path.parent),
+                        start_new_session=True,
+                    )
             except Exception:
-                pass
+                return False
+            # If fallback succeeded, close the app via provided callback.
+            if close_app is not None:
+                try:
+                    close_app()
+                except Exception:
+                    pass
+            return True
+
+        # Helper spawned successfully – terminate this process so the helper
+        # can wait for our PID to disappear.
+        sys.exit(0)
+        # Unreachable, but keep return for type checkers.
         return True
 
     def restart_app(self) -> None:
