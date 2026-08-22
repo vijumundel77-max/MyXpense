@@ -32,7 +32,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import tempfile
+import time
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -300,3 +303,124 @@ def download_installer(release_info: Dict[str, Any],
             pass
         raise UpdateError("Downloaded installer is empty.")
     return dest
+
+
+# --------------------------------------------------------------------------- #
+# apply stage – detached helper
+# --------------------------------------------------------------------------- #
+def _wait_for_pid(pid: int, timeout: float = 30.0) -> None:
+    """Block until the process with ``pid`` exits (Windows)."""
+    if os.name != "nt":
+        # fallback generic poll
+        start = time.time()
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            if time.time() - start > timeout:
+                raise TimeoutError(f"Process {pid} did not exit within {timeout}s")
+            time.sleep(0.2)
+
+    # Windows: use WaitForSingleObject on a handle with SYNCHRONIZE access
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.windll.kernel32
+    SYNCHRONIZE = 0x00100000
+    handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+    if not handle:
+        # process already gone
+        return
+    try:
+        WAIT_OBJECT_0 = 0
+        INFINITE = 0xFFFFFFFF
+        # Wait with a reasonable timeout loop to allow KeyboardInterrupt etc.
+        while True:
+            result = kernel32.WaitForSingleObject(handle, 1000)  # 1 sec
+            if result == WAIT_OBJECT_0:
+                return
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _apply_helper(pid: int, installer_path: Path) -> None:
+    """Runs in a detached process: waits for the old Expenzo to exit,
+    then launches the Inno Setup installer silently. Errors are logged
+    to a temporary file so they are not swallowed.
+    """
+    log_path = Path(tempfile.gettempdir()) / "Expenzo_update_error.log"
+    try:
+        _wait_for_pid(pid)
+        # Launch installer silently; Inno Setup will restart the app via its [Run] section
+        subprocess.run(
+            [str(installer_path), "/VERYSILENT", "/NORESTART"],
+            check=True,
+        )
+    except Exception as exc:  # pragma: no cover – defensive logging
+        try:
+            with log_path.open("a", encoding="utf-8") as lf:
+                lf.write(f"{datetime.utcnow().isoformat()}Z update failed: {exc}\n")
+        except Exception:
+            pass
+        # Re‑raise so the detached process exits non‑zero (visible in logs)
+        raise
+
+
+def _build_helper_cmd(pid: int, installer_path: Path) -> list[str]:
+    """Return the command line to launch the detached helper.
+    In a frozen (PyInstaller) build sys.executable is the Expenzo.exe itself,
+    so we invoke the same executable with a custom flag.  In development we
+    fall back to ``python -m services.update_service``.
+    """
+    if getattr(sys, "frozen", False):
+        # Frozen build – re‑launch the same exe with a dedicated flag
+        return [sys.executable, "--apply-helper", str(pid), str(installer_path)]
+    # Development / source run
+    return [
+        sys.executable,
+        "-m",
+        "services.update_service",
+        "--apply-helper",
+        str(pid),
+        str(installer_path),
+    ]
+
+
+def apply_update(installer_path: Path) -> None:
+    """Spawn a detached helper that will apply the update after the current
+    Expenzo process terminates. This function returns immediately; the caller
+    should exit the application (e.g. ``sys.exit(0)``) after calling it.
+    """
+    pid = os.getpid()
+    helper_cmd = _build_helper_cmd(pid, installer_path)
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    # Detach completely – redirect output to a log file to avoid console windows
+    log_path = Path(tempfile.gettempdir()) / "Expenzo_update_helper.log"
+    with log_path.open("w", encoding="utf-8") as log_file:
+        subprocess.Popen(
+            helper_cmd,
+            creationflags=creationflags,
+            stdout=log_file,
+            stderr=log_file,
+            close_fds=True,
+        )
+    # Caller is expected to exit now.
+
+
+# --------------------------------------------------------------------------- #
+# command‑line entry point for the detached helper
+# --------------------------------------------------------------------------- #
+if __name__ == "__main__":  # pragma: no cover
+    if "--apply-helper" in sys.argv:
+        try:
+            idx = sys.argv.index("--apply-helper")
+            pid = int(sys.argv[idx + 1])
+            installer_path = Path(sys.argv[idx + 2])
+            _apply_helper(pid, installer_path)
+        except Exception as exc:  # pragma: no cover
+            # Ensure a non‑zero exit code so the launcher can detect failure
+            sys.exit(1)
+    # No other CLI modes for now
