@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import customtkinter as ctk
 
-import config
+from utils.debounce import Debouncer
 
 
 class DataTable(ctk.CTkFrame):
@@ -64,6 +64,7 @@ class DataTable(ctk.CTkFrame):
     def _build(self, searchable: bool) -> None:
         if searchable:
             self.search_var = tk.StringVar()
+            self._search_debouncer = Debouncer(self, delay_ms=250)
             self.search_entry = ctk.CTkEntry(
                 self, textvariable=self.search_var, height=32,
                 corner_radius=config.INPUT_CORNER_RADIUS,
@@ -71,7 +72,7 @@ class DataTable(ctk.CTkFrame):
             )
             self.search_entry.pack(fill="x", padx=config.SPACING_LG,
                                    pady=(config.SPACING_MD, config.SPACING_SM))
-            self.search_var.trace_add("write", lambda *_: self._apply_search())
+            self.search_var.trace_add("write", lambda *_: self._search_debouncer.schedule(self._apply_search))
 
         self.totals_label = ctk.CTkLabel(
             self, text="", anchor="w",

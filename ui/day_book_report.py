@@ -13,7 +13,6 @@ from tkinter import ttk
 import config
 from services.voucher_register_service import voucher_register_service
 from services.voucher_service import (
-    VOUCHER_TYPES,
     VOUCHER_PAYMENT,
     VOUCHER_RECEIPT,
     voucher_service,
@@ -21,7 +20,6 @@ from services.voucher_service import (
 from services.date_control_service import date_control
 from ui.report_base import (
     ReportBackHeader,
-    ReportStatusBar,
     make_date_picker,
     make_readonly_combo,
     make_button,
@@ -34,9 +32,9 @@ class DayBookReportUI:
     """Day Book (voucher register) — one row per voucher, ultra‑compact."""
 
     _COLUMNS = [
-        {"id": "date", "heading": "Date", "width": 95, "anchor": "center", "stretch": False},
-        {"id": "particulars", "heading": "Particulars", "width": 260, "anchor": "w", "stretch": True},
-        {"id": "voucher_type", "heading": "Vch Type", "width": 100, "anchor": "center", "stretch": False},
+        {"id": "date", "heading": "Date", "width": 95, "anchor": "w", "stretch": False},
+        {"id": "particulars", "heading": "Particulars", "width": 280, "anchor": "w", "stretch": True},
+        {"id": "voucher_type", "heading": "Vch Type", "width": 110, "anchor": "center", "stretch": False},
         {"id": "voucher_no", "heading": "Vch No.", "width": 100, "anchor": "center", "stretch": False},
         {"id": "debit", "heading": "Debit (₹)", "width": 110, "anchor": "e", "stretch": False},
         {"id": "credit", "heading": "Credit (₹)", "width": 110, "anchor": "e", "stretch": False},
@@ -54,74 +52,48 @@ class DayBookReportUI:
             corner_radius=0,
             fg_color=config.VOUCHER_BG_PRIMARY,          # #0B1329
         )
-        self.main_frame.pack(fill="both", expand=True, padx=config.SPACING_XL, pady=config.SPACING_XL)
+        self.main_frame.pack(fill="both", expand=True, padx=16, pady=6)
 
-        # ---- header -----------------------------------------------------
-        ReportBackHeader(
-            self.main_frame,
-            "📖  Day Book",
-            "Voucher register / day‑wise transaction summary",
-            on_back=self._back,
-        )
+        # ---- header (ultra‑compact) ------------------------------------
+        header_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        header_frame.pack(fill="x", pady=(0, 2))
+        ctk.CTkButton(
+            header_frame, text="←", width=28, height=24,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            command=self._back,
+        ).pack(side="left")
+        title_block = ctk.CTkFrame(header_frame, fg_color="transparent")
+        title_block.pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(
+            title_block, text="📖  Day Book", font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=config.COLOR_TEXT_PRIMARY,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            title_block, text="Voucher register / day‑wise transaction summary",
+            font=ctk.CTkFont(size=10), text_color=config.COLOR_TEXT_SECONDARY,
+        ).pack(anchor="w")
 
         # ---- toolbar (action row) ---------------------------------------
         self._build_toolbar()
 
-        # ---- compact filter bar -----------------------------------------
-        self._build_filters()
+        # ---- compact single‑row filter bar -------------------------------
+        self._build_filters(self.main_frame)
 
         # ---- high‑density scrollable table -------------------------------
         self._build_table()
 
-        # ---- totals bar (inside table container) already built in _build_table
-
         # ---- bottom shortcut bar ----------------------------------------
         self._build_shortcut_bar()
 
-        self.status = ReportStatusBar(self.main_frame)
         wire_report_keyboard(self)
 
         # auto‑generate on open
         self._generate_report()
 
     # ------------------------------------------------------------------ #
-    # toolbar – height 30px, pady=(2,4)
+    # toolbar – ultra‑compact, height 26px, pady=(0,2)
     # ------------------------------------------------------------------ #
     def _build_toolbar(self) -> None:
-        bar = ctk.CTkFrame(
-            self.main_frame,
-            fg_color=config.VOUCHER_CARD_BG,            # #10192E
-            corner_radius=config.CARD_CORNER_RADIUS,
-            border_width=1,
-            border_color=config.VOUCHER_CARD_BORDER,    # #1B2848
-        )
-        bar.pack(fill="x", pady=(2, 4))
-        inner = ctk.CTkFrame(bar, fg_color="transparent")
-        inner.pack(fill="x", padx=config.SPACING_LG, pady=2)
-
-        self.btn_new = make_button(
-            inner, "+ New Voucher", self._new_voucher, width=130, accent=True
-        )
-        self.btn_new.pack(side="left", padx=(0, config.SPACING_SM))
-
-        self.btn_open = make_button(
-            inner, "📝 Open / Edit", self._open_selected, width=130
-        )
-        self.btn_open.pack(side="left", padx=(0, config.SPACING_SM))
-
-        self.btn_view = make_button(inner, "👁 View", self._view_selected, width=100)
-        self.btn_view.pack(side="left", padx=(0, config.SPACING_SM))
-
-        self.btn_delete = make_button(inner, "🗑 Delete", self._delete_selected, width=100)
-        self.btn_delete.pack(side="left", padx=(0, config.SPACING_SM))
-
-        self.btn_refresh = make_button(inner, "↻ Refresh", self._generate_report, width=110)
-        self.btn_refresh.pack(side="left")
-
-    # ------------------------------------------------------------------ #
-    # compact filter bar – height ~60px, pady=(3,6)
-    # ------------------------------------------------------------------ #
-    def _build_filters(self) -> None:
         bar = ctk.CTkFrame(
             self.main_frame,
             fg_color=config.VOUCHER_CARD_BG,
@@ -129,71 +101,110 @@ class DayBookReportUI:
             border_width=1,
             border_color=config.VOUCHER_CARD_BORDER,
         )
-        bar.pack(fill="x", pady=(3, 6))
-        body = ctk.CTkFrame(bar, fg_color="transparent")
-        body.pack(fill="x", padx=config.SPACING_LG, pady=4)
-        self.filters = bar
+        bar.pack(fill="x", pady=(0, 2))
+        inner = ctk.CTkFrame(bar, fg_color="transparent")
+        inner.pack(fill="x", padx=8, pady=1)
 
-        # default period from date_control
-        from_dt, to_dt = date_control.period(self.company_id)
-        self.from_date_var = tk.StringVar(value=from_dt.strftime(config.DISPLAY_DATE_FORMAT))
-        self.to_date_var = tk.StringVar(value=to_dt.strftime(config.DISPLAY_DATE_FORMAT))
-        self.type_var = tk.StringVar(value="All")
-        self.search_var = tk.StringVar()
+        btn_kwargs = {"height": 26, "corner_radius": config.BUTTON_CORNER_RADIUS}
+        self.btn_new = ctk.CTkButton(inner, text="+ New Voucher", width=120,
+                                     fg_color=config.COLOR_PRIMARY, hover_color=config.COLOR_PRIMARY_HOVER,
+                                     text_color="#FFFFFF", command=self._new_voucher, **btn_kwargs)
+        self.btn_new.pack(side="left", padx=(0, 4))
 
-        # column 0 – From Date
-        self._filter_field(body, 0, "From Date", make_date_picker(body, self.from_date_var))
-        # column 1 – To Date
-        self._filter_field(body, 1, "To Date", make_date_picker(body, self.to_date_var))
-        # column 2 – Voucher Type
-        self.type_combo = make_readonly_combo(
-            body,
-            ["All", "Payment", "Receipt", "Contra", "Journal", "Sales", "Purchase"],
-            self.type_var,
-            150,
+        self.btn_open = ctk.CTkButton(inner, text="📝 Open / Edit", width=110,
+                                      fg_color=config.VOUCHER_CARD_BG, border_width=1,
+                                      border_color=config.VOUCHER_CARD_BORDER,
+                                      text_color=config.COLOR_TEXT_PRIMARY, command=self._open_selected, **btn_kwargs)
+        self.btn_open.pack(side="left", padx=(0, 4))
+
+        self.btn_view = ctk.CTkButton(inner, text="👁 View", width=80,
+                                      fg_color=config.VOUCHER_CARD_BG, border_width=1,
+                                      border_color=config.VOUCHER_CARD_BORDER,
+                                      text_color=config.COLOR_TEXT_PRIMARY, command=self._view_selected, **btn_kwargs)
+        self.btn_view.pack(side="left", padx=(0, 4))
+
+        self.btn_delete = ctk.CTkButton(inner, text="🗑 Delete", width=80,
+                                        fg_color=config.VOUCHER_CARD_BG, border_width=1,
+                                        border_color=config.VOUCHER_CARD_BORDER,
+                                        text_color=config.COLOR_TEXT_PRIMARY, command=self._delete_selected, **btn_kwargs)
+        self.btn_delete.pack(side="left", padx=(0, 4))
+
+        self.btn_refresh = ctk.CTkButton(inner, text="↻ Refresh", width=90,
+                                         fg_color=config.VOUCHER_CARD_BG, border_width=1,
+                                         border_color=config.VOUCHER_CARD_BORDER,
+                                         text_color=config.COLOR_TEXT_PRIMARY, command=self._generate_report, **btn_kwargs)
+        self.btn_refresh.pack(side="left")
+
+    # ------------------------------------------------------------------ #
+    # ultra‑compact filter bar – single horizontal row, height ~42px
+    # ------------------------------------------------------------------ #
+    def _build_filters(self, parent) -> None:
+        filter_card = ctk.CTkFrame(
+            parent,
+            height=44,
+            fg_color="#10192E",
+            border_color="#1B2848",
+            border_width=1,
+            corner_radius=8,
         )
-        self._filter_field(body, 2, "Voucher Type", self.type_combo)
+        filter_card.pack(fill="x", pady=(0, 4), padx=0)
+        filter_card.pack_propagate(False)
 
-        # column 3 – Search (expands)
-        self.search_entry = ctk.CTkEntry(
-            body,
-            textvariable=self.search_var,
-            width=220,
-            placeholder_text="Search particulars, ledger...",
-            corner_radius=config.INPUT_CORNER_RADIUS,
-            height=30,
-        )
-        self._filter_field(body, 3, "Search", self.search_entry)
+        inner = ctk.CTkFrame(filter_card, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=10, pady=4)
 
-        # column 4 – Generate / Refresh (custom height 32)
-        gen_btn = ctk.CTkButton(
-            body,
-            text="⚡ Generate / Refresh",
-            width=170,
-            height=32,
-            corner_radius=config.BUTTON_CORNER_RADIUS,
-            command=self._generate_report,
-            fg_color=config.COLOR_PRIMARY,
-            hover_color=config.COLOR_PRIMARY_HOVER,
-            text_color="#FFFFFF",
-        )
-        gen_btn.grid(row=0, column=4, sticky="w", padx=(config.SPACING_MD, 0), pady=(config.SPACING_XS, 0))
+        # 1. From Date
+        ctk.CTkLabel(inner, text="From:", font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="#94A3B8").pack(side="left", padx=(0, 4))
+        self.from_date_entry = ctk.CTkEntry(inner, width=95, height=28,
+                                            font=ctk.CTkFont(size=11))
+        self.from_date_entry.pack(side="left", padx=(0, 10))
 
-        # make search column take remaining space
-        body.grid_columnconfigure(3, weight=1)
+        # 2. To Date
+        ctk.CTkLabel(inner, text="To:", font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="#94A3B8").pack(side="left", padx=(0, 4))
+        self.to_date_entry = ctk.CTkEntry(inner, width=95, height=28,
+                                          font=ctk.CTkFont(size=11))
+        self.to_date_entry.pack(side="left", padx=(0, 10))
 
-    def _filter_field(self, parent, column: int, label: str, widget) -> None:
-        holder = ctk.CTkFrame(parent, fg_color="transparent")
-        holder.grid(row=0, column=column, sticky="w", padx=(0 if column == 0 else config.SPACING_LG, 0))
-        ctk.CTkLabel(
-            holder,
-            text=label,
+        # Pre‑fill dates from date_control
+        from_d, to_d = date_control.period(self.company_id)
+        self.from_date_entry.insert(0, from_d.strftime("%d-%m-%Y"))
+        self.to_date_entry.insert(0, to_d.strftime("%d-%m-%Y"))
+
+        # 3. Voucher Type
+        ctk.CTkLabel(inner, text="Type:", font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="#94A3B8").pack(side="left", padx=(0, 4))
+        self.voucher_type_menu = ctk.CTkOptionMenu(
+            inner,
+            values=["All", "Payment", "Receipt", "Contra", "Journal", "Sales", "Purchase"],
+            width=100,
+            height=28,
             font=ctk.CTkFont(size=11),
-            text_color=config.COLOR_TEXT_SECONDARY,
-            anchor="w",
-        ).pack(anchor="w")
-        widget.grid(row=1, column=0, sticky="w", pady=(2, 0))
-        holder.search_entry = getattr(widget, "search_entry", None)
+        )
+        self.voucher_type_menu.pack(side="left", padx=(0, 10))
+
+        # 4. Search Bar
+        self.search_entry = ctk.CTkEntry(
+            inner,
+            placeholder_text="Search particulars, voucher no...",
+            height=28,
+            font=ctk.CTkFont(size=11),
+        )
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        # 5. Generate / Refresh Button
+        self.generate_btn = ctk.CTkButton(
+            inner,
+            text="⚡ Generate",
+            width=100,
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#3B82F6",
+            hover_color="#2563EB",
+            command=self._generate_report,
+        )
+        self.generate_btn.pack(side="right")
 
     # ------------------------------------------------------------------ #
     # high‑density scrollable table
@@ -206,7 +217,7 @@ class DayBookReportUI:
             border_width=1,
             border_color=config.VOUCHER_CARD_BORDER,
         )
-        container.pack(fill="both", expand=True, pady=(2, 4))
+        container.pack(fill="both", expand=True, pady=(0, 4))
         container.grid_rowconfigure(1, weight=1)
         container.grid_columnconfigure(0, weight=1)
         self.table_container = container
@@ -219,21 +230,21 @@ class DayBookReportUI:
             background=config.VOUCHER_CARD_BG,
             fieldbackground=config.VOUCHER_CARD_BG,
             foreground=config.COLOR_TEXT_PRIMARY,
-            rowheight=34,
-            font=("Segoe UI", 11),
+            rowheight=30,
+            font=("Segoe UI", 10),
             borderwidth=0,
         )
         style.configure(
             "Compact.Treeview.Heading",
             background=config.VOUCHER_CARD_BORDER,
             foreground=config.COLOR_TEXT_PRIMARY,
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 10, "bold"),
             relief="flat",
         )
         style.map("Compact.Treeview", background=[("selected", "#162544")])
 
-        # fixed header row (height 28)
-        header = ctk.CTkFrame(container, fg_color=config.VOUCHER_CARD_BORDER, corner_radius=0, height=28)
+        # fixed header row (height 26)
+        header = ctk.CTkFrame(container, fg_color=config.VOUCHER_CARD_BORDER, corner_radius=0, height=26)
         header.grid(row=0, column=0, sticky="ew")
         header.grid_propagate(False)
         for idx, col in enumerate(self._COLUMNS):
@@ -241,16 +252,16 @@ class DayBookReportUI:
             ctk.CTkLabel(
                 header,
                 text=col["heading"],
-                font=ctk.CTkFont(size=11, weight="bold"),
+                font=ctk.CTkFont(size=10, weight="bold"),
                 text_color=config.COLOR_TEXT_PRIMARY,
                 anchor="w" if col["anchor"] == "w" else "e",
             ).grid(
                 row=0,
                 column=idx,
                 sticky="ew",
-                padx=(config.SPACING_LG if idx == 0 else config.SPACING_SM,
-                      config.SPACING_LG if idx == len(self._COLUMNS) - 1 else config.SPACING_SM),
-                pady=2,
+                padx=(8 if idx == 0 else 4,
+                      8 if idx == len(self._COLUMNS) - 1 else 4),
+                pady=1,
             )
 
         # scrollable body
@@ -302,7 +313,7 @@ class DayBookReportUI:
         self.empty_label.grid(row=1, column=0)
 
         # ---- footer strip inside table container (totals) ----
-        self.footer_frame = ctk.CTkFrame(container, fg_color=config.VOUCHER_CARD_BORDER, corner_radius=0, height=36)
+        self.footer_frame = ctk.CTkFrame(container, fg_color=config.VOUCHER_CARD_BORDER, corner_radius=0, height=26)
         self.footer_frame.grid(row=2, column=0, sticky="ew")
         self.footer_frame.grid_propagate(False)
         self.footer_frame.grid_columnconfigure(0, weight=1)
@@ -311,23 +322,23 @@ class DayBookReportUI:
         self.footer_left = ctk.CTkLabel(
             self.footer_frame,
             text="Total Transactions: 0",
-            font=ctk.CTkFont(size=11, weight="bold"),
+            font=ctk.CTkFont(size=10, weight="bold"),
             text_color=config.COLOR_TEXT_SECONDARY,
             anchor="w",
         )
-        self.footer_left.grid(row=0, column=0, sticky="w", padx=config.SPACING_LG, pady=4)
+        self.footer_left.grid(row=0, column=0, sticky="w", padx=8, pady=2)
 
         self.footer_right = ctk.CTkLabel(
             self.footer_frame,
             text="",
-            font=ctk.CTkFont(size=11, weight="bold"),
+            font=ctk.CTkFont(size=10, weight="bold"),
             text_color=config.COLOR_TEXT_PRIMARY,
             anchor="e",
         )
-        self.footer_right.grid(row=0, column=1, sticky="e", padx=config.SPACING_LG, pady=4)
+        self.footer_right.grid(row=0, column=1, sticky="e", padx=8, pady=2)
 
     # ------------------------------------------------------------------ #
-    # bottom shortcut bar – height 28px
+    # bottom shortcut bar – height 26px
     # ------------------------------------------------------------------ #
     def _build_shortcut_bar(self) -> None:
         bar = ctk.CTkFrame(
@@ -336,34 +347,32 @@ class DayBookReportUI:
             corner_radius=config.CARD_CORNER_RADIUS,
             border_width=1,
             border_color=config.VOUCHER_CARD_BORDER,
-            height=28,
+            height=26,
         )
-        bar.pack(fill="x", pady=(2, 4))
+        bar.pack(fill="x", pady=(0, 2))
         bar.pack_propagate(False)
         inner = ctk.CTkFrame(bar, fg_color="transparent")
-        inner.pack(fill="both", padx=config.SPACING_LG, pady=2)
+        inner.pack(fill="both", padx=8, pady=1)
 
-        # left info
         ctk.CTkLabel(
             inner,
             text="ℹ Day Book shows all vouchers in chronological order on the selected date range.",
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=9),
             text_color=config.COLOR_TEXT_MUTED,
         ).pack(side="left")
 
-        # right keyboard badges
         badges = [
             ("F5", "Refresh"),
             ("Ctrl+N", "New Voucher"),
             ("Enter", "Open / Edit"),
         ]
         for key, desc in badges:
-            badge = ctk.CTkFrame(inner, fg_color=config.VOUCHER_CARD_BORDER, corner_radius=4)
-            badge.pack(side="right", padx=(config.SPACING_SM, 0))
-            ctk.CTkLabel(badge, text=key, font=ctk.CTkFont(size=10, weight="bold"),
-                         text_color=config.COLOR_TEXT_PRIMARY).pack(side="left", padx=6, pady=2)
-            ctk.CTkLabel(badge, text=desc, font=ctk.CTkFont(size=10),
-                         text_color=config.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0,6), pady=2)
+            badge = ctk.CTkFrame(inner, fg_color=config.VOUCHER_CARD_BORDER, corner_radius=3)
+            badge.pack(side="right", padx=(4, 0))
+            ctk.CTkLabel(badge, text=key, font=ctk.CTkFont(size=9, weight="bold"),
+                         text_color=config.COLOR_TEXT_PRIMARY).pack(side="left", padx=5, pady=1)
+            ctk.CTkLabel(badge, text=desc, font=ctk.CTkFont(size=9),
+                         text_color=config.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0,5), pady=1)
 
     # ------------------------------------------------------------------ #
     # interactions
@@ -453,12 +462,13 @@ class DayBookReportUI:
 
     def _clear_filters(self) -> None:
         from_dt, to_dt = date_control.period(self.company_id)
-        self.from_date_var.set(from_dt.strftime(config.DISPLAY_DATE_FORMAT))
-        self.to_date_var.set(to_dt.strftime(config.DISPLAY_DATE_FORMAT))
-        self.type_var.set("All")
-        self.search_var.set("")
+        self.from_date_entry.delete(0, tk.END)
+        self.from_date_entry.insert(0, from_dt.strftime("%d-%m-%Y"))
+        self.to_date_entry.delete(0, tk.END)
+        self.to_date_entry.insert(0, to_dt.strftime("%d-%m-%Y"))
+        self.voucher_type_menu.set("All")
+        self.search_entry.delete(0, tk.END)
         self._show_empty("Select dates and generate the Day Book to begin.")
-        self.status.set("Filters cleared")
 
     def _parse_date(self, raw: str) -> Optional[date]:
         for fmt in (config.DISPLAY_DATE_FORMAT, config.DB_DATE_FORMAT):
@@ -473,8 +483,8 @@ class DayBookReportUI:
         return d.strftime(config.DISPLAY_DATE_FORMAT) if d else raw
 
     def _generate_report(self) -> None:
-        from_date = self._parse_date(self.from_date_var.get())
-        to_date = self._parse_date(self.to_date_var.get())
+        from_date = self._parse_date(self.from_date_entry.get())
+        to_date = self._parse_date(self.to_date_entry.get())
         if not from_date or not to_date:
             dialogs.warn("Day Book", "Invalid date. Use DD‑MM‑YYYY format.", parent=self.parent)
             return
@@ -486,8 +496,8 @@ class DayBookReportUI:
             self.company_id,
             from_date,
             to_date,
-            voucher_type="" if self.type_var.get() == "All" else self.type_var.get(),
-            search_term=self.search_var.get().strip(),
+            voucher_type="" if self.voucher_type_menu.get() == "All" else self.voucher_type_menu.get(),
+            search_term=self.search_entry.get().strip(),
         )
         if not report.get("success"):
             dialogs.error("Day Book", report.get("error", "Failed to generate report"), parent=self.parent)
@@ -531,23 +541,31 @@ class DayBookReportUI:
         total_debit = 0.0
         total_credit = 0.0
         for idx, v in enumerate(vouchers.values()):
-            vtype = v["vtype"]
+            vtype_raw = v["vtype"]
+            vtype = str(vtype_raw).strip().title()
             debit_amt = round(v["debit"], 2)
             credit_amt = round(v["credit"], 2)
 
-            if vtype in (VOUCHER_PAYMENT, "Purchase", "Debit"):
+            if vtype in ("Payment", "Purchase", "Debit Note"):
+                debit_val = f"{debit_amt:,.2f}"
+                credit_val = "—"
                 amount_display = f"{debit_amt:,.2f} Dr"
                 amount_tag = "debit"
-            elif vtype in (VOUCHER_RECEIPT, "Sales", "Receipt", "Credit"):
+            elif vtype in ("Receipt", "Sales", "Credit Note"):
+                debit_val = "—"
+                credit_val = f"{credit_amt:,.2f}"
                 amount_display = f"{credit_amt:,.2f} Cr"
                 amount_tag = "credit"
+            elif vtype == "Contra":
+                debit_val = f"{debit_amt:,.2f}"
+                credit_val = f"{credit_amt:,.2f}"
+                amount_display = f"{max(debit_amt, credit_amt):,.2f}"
+                amount_tag = "odd"
             else:
-                if debit_amt >= credit_amt:
-                    amount_display = f"{debit_amt:,.2f} Dr"
-                    amount_tag = "debit"
-                else:
-                    amount_display = f"{credit_amt:,.2f} Cr"
-                    amount_tag = "credit"
+                debit_val = f"{debit_amt:,.2f}"
+                credit_val = "—"
+                amount_display = f"{debit_amt:,.2f} Dr"
+                amount_tag = "debit"
 
             total_debit += debit_amt
             total_credit += credit_amt
@@ -563,25 +581,20 @@ class DayBookReportUI:
                 values=(
                     self._format_date(v["date"]),
                     v["particulars"],
-                    vtype,
+                    vtype_raw,
                     v["vno"],
-                    f"{debit_amt:,.2f}",
-                    f"{credit_amt:,.2f}",
+                    debit_val,
+                    credit_val,
                     amount_display,
                 ),
                 tags=tags,
             )
 
         self._update_footer(len(vouchers), total_debit, total_credit)
-        self.status.set(
-            f"Day Book generated: {len(vouchers)} vouchers "
-            f"({self._format_date(report.get('from_date', ''))} to "
-            f"{self._format_date(report.get('to_date', ''))})"
-        )
 
     def _update_footer(self, txn_count: int, tot_debit: float, tot_credit: float) -> None:
         diff = tot_debit - tot_credit
-        diff_color = config.COLOR_INCOME if diff >= 0 else config.COLOR_WARNING  # green / amber
+        diff_color = config.COLOR_INCOME if diff >= 0 else config.COLOR_WARNING
         self.footer_left.configure(text=f"Total Transactions: {txn_count}")
         self.footer_right.configure(
             text=f"Total Debit: ₹{tot_debit:,.2f}   Total Credit: ₹{tot_credit:,.2f}   Diff: ₹{diff:,.2f}"

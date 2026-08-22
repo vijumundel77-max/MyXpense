@@ -36,6 +36,7 @@ import customtkinter as ctk
 import config
 from services.group_service import group_service
 from utils import dialogs
+from utils.debounce import Debouncer
 
 ALLOCATION_METHODS = [
     "Proportional to Quantity",
@@ -491,7 +492,8 @@ class _GroupListState:
         self.main.grid_columnconfigure(0, weight=1)
 
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", owner._apply_search)
+        self._search_debouncer = Debouncer(self.main, delay_ms=250)
+        self.search_var.trace_add("write", lambda *_: self._search_debouncer.schedule(owner._apply_search))
         self.show_inactive_var = tk.BooleanVar(value=False)
         self.selected_id: Optional[int] = None
 

@@ -403,15 +403,21 @@ class ReportTable(ctk.CTkFrame):
         self.empty_label.pack(pady=(config.SPACING_XXL, config.SPACING_XXL))
 
     def clear(self) -> None:
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        """Fast clear - use delete with children list instead of iteration."""
+        children = self.tree.get_children()
+        if children:
+            self.tree.delete(*children)
 
     def set_rows(self, rows: Iterable[Iterable[Any]]) -> None:
-        """Replace table contents with the given rows (zebra-striped)."""
+        """Replace table contents with the given rows (zebra-striped) - optimized batch insert."""
         self.clear()
-        for index, row in enumerate(rows):
-            self.tree.insert("", tk.END, values=tuple(row),
-                             tags=('even' if index % 2 == 0 else 'odd',))
+        # Convert to list once for batch processing
+        rows_list = list(rows)
+        # Use list comprehension for fast tag assignment
+        tagged_rows = [(tuple(row), 'even' if i % 2 == 0 else 'odd') for i, row in enumerate(rows_list)]
+        # Batch insert - faster than individual inserts
+        for values, tag in tagged_rows:
+            self.tree.insert("", tk.END, values=values, tags=(tag,))
 
     def show_empty(self, message: str = "No data to display.") -> None:
         self.clear()
@@ -567,3 +573,320 @@ def wire_report_keyboard(view) -> None:
             view, "_generate_report", lambda: None)()
     if getattr(view, "on_keyboard_new", None) is None:
         view.on_keyboard_new = lambda: None
+
+
+# ----------------------------------------------------------------------
+# Compact, high‑density report base (used by Day Book, Cash Book, …)
+# ----------------------------------------------------------------------
+class CompactReportUI:
+    """
+    Base class that builds the ultra‑compact layout shared by all
+    transaction‑style reports.
+
+    Sub‑classes must provide:
+        • self._COLUMNS                – list of column dicts for the tree
+        • self._fetch_report(...)      – returns the raw report dict
+        • self._render_rows(report)    – fills the tree and updates footer
+        • optional: self._extra_toolbar_buttons() – extra buttons for the action row
+    """
+
+    # colour constants (use the voucher‑dark palette)
+    BG_PRIMARY      = "#0B1329"
+    CARD_BG         = "#10192E"
+    CARD_BORDER     = "#1B2848"
+    PRIMARY_BLUE    = "#3B82F6"
+    PRIMARY_HOVER   = "#2563EB"
+    TEXT_PRIMARY    = "#F8FAFC"
+    TEXT_SECONDARY  = "#94A3B8"
+    TEXT_MUTED      = "#64748B"
+    RED             = "#EF4444"
+    GREEN           = "#10B981"
+    AMBER           = "#F59E0B"
+
+    def __init__(self, parent: tk.Widget, company_id: int):
+        self.parent = parent
+        self.company_id = company_id
+        self.current_report_data = None
+
+        # ---- root -------------------------------------------------------
+        self.main_frame = ctk.CTkFrame(parent, corner_radius=0, fg_color=self.BG_PRIMARY)
+        self.main_frame.pack(fill="both", expand=True, padx=16, pady=4)
+
+        # ---- header -----------------------------------------------------
+        self._build_header()
+
+        # ---- toolbar (action row) ---------------------------------------
+        self._build_toolbar()
+
+        # ---- single‑line filter bar -------------------------------------
+        self._build_filter_bar()
+
+        # ---- table ------------------------------------------------------
+        self._build_table()
+
+        # ---- footer (totals) -------------------------------------------
+        self._build_footer()
+
+        # ---- shortcut bar ------------------------------------------------
+        self._build_shortcut_bar()
+
+        wire_report_keyboard(self)
+
+        # auto‑generate
+        self._generate_report()
+
+    # ------------------------------------------------------------------
+    def _build_header(self) -> None:
+        hdr = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        hdr.pack(fill="x", pady=(0, 2))
+        ctk.CTkButton(
+            hdr, text="←", width=28, height=24,
+            corner_radius=config.BUTTON_CORNER_RADIUS,
+            command=self._back,
+        ).pack(side="left")
+        title_block = ctk.CTkFrame(hdr, fg_color="transparent")
+        title_block.pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(
+            title_block, text=self._REPORT_TITLE, font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=self.TEXT_PRIMARY,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            title_block, text=self._REPORT_SUBTITLE,
+            font=ctk.CTkFont(size=10), text_color=self.TEXT_MUTED,
+        ).pack(anchor="w")
+
+    # ------------------------------------------------------------------
+    def _build_toolbar(self) -> None:
+        bar = ctk.CTkFrame(self.main_frame, fg_color=self.CARD_BG,
+                           corner_radius=config.CARD_CORNER_RADIUS,
+                           border_width=1, border_color=self.CARD_BORDER)
+        bar.pack(fill="x", pady=(0, 2))
+        inner = ctk.CTkFrame(bar, fg_color="transparent")
+        inner.pack(fill="x", padx=8, pady=1)
+
+        btn_kwargs = {"height": 26, "corner_radius": config.BUTTON_CORNER_RADIUS}
+        # primary New button
+        ctk.CTkButton(inner, text="+ New Voucher", width=120,
+                      fg_color=self.PRIMARY_BLUE, hover_color=self.PRIMARY_HOVER,
+                      text_color="#FFFFFF", command=self._new_voucher, **btn_kwargs).pack(side="left", padx=(0, 4))
+        # secondary pills
+        for txt, cmd in (("📝 Open / Edit", self._open_selected),
+                         ("👁 View", self._view_selected),
+                         ("↻ Refresh", self._generate_report)):
+            ctk.CTkButton(inner, text=txt, width=110,
+                          fg_color=self.CARD_BG, border_width=1,
+                          border_color=self.CARD_BORDER,
+                          text_color=self.TEXT_PRIMARY, command=cmd, **btn_kwargs).pack(side="left", padx=(0, 4))
+        # extra buttons from subclass
+        for txt, cmd in getattr(self, "_extra_toolbar_buttons", lambda: [])():
+            ctk.CTkButton(inner, text=txt, width=110,
+                          fg_color=self.CARD_BG, border_width=1,
+                          border_color=self.CARD_BORDER,
+                          text_color=self.TEXT_PRIMARY, command=cmd, **btn_kwargs).pack(side="left", padx=(0, 4))
+
+    # ------------------------------------------------------------------
+    def _build_filter_bar(self) -> None:
+        card = ctk.CTkFrame(self.main_frame, height=44, fg_color=self.CARD_BG,
+                            border_color=self.CARD_BORDER, border_width=1,
+                            corner_radius=8)
+        card.pack(fill="x", pady=(0, 4), padx=0)
+        card.pack_propagate(False)
+
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=10, pady=4)
+
+        # From / To dates
+        from_dt, to_dt = date_control.period(self.company_id)
+        self.from_var = tk.StringVar(value=from_dt.strftime(config.DISPLAY_DATE_FORMAT))
+        self.to_var   = tk.StringVar(value=to_dt.strftime(config.DISPLAY_DATE_FORMAT))
+
+        def add_label_entry(lbl, var, width=95):
+            ctk.CTkLabel(inner, text=lbl, font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=self.TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+            e = ctk.CTkEntry(inner, textvariable=var, width=width, height=28,
+                             font=ctk.CTkFont(size=11))
+            e.pack(side="left", padx=(0, 10))
+            return e
+
+        self.from_entry = add_label_entry("From:", self.from_var)
+        self.to_entry   = add_label_entry("To:",   self.to_var)
+
+        # Type / Account dropdown (sub‑class supplies values)
+        ctk.CTkLabel(inner, text="Type:", font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=self.TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        self.type_var = tk.StringVar(value="All")
+        self.type_menu = ctk.CTkOptionMenu(inner, values=self._FILTER_TYPES,
+                                           variable=self.type_var,
+                                           width=100, height=28,
+                                           font=ctk.CTkFont(size=11))
+        self.type_menu.pack(side="left", padx=(0, 10))
+
+        # Search entry (expands)
+        self.search_var = tk.StringVar()
+        self.search_entry = ctk.CTkEntry(inner,
+                                         textvariable=self.search_var,
+                                         placeholder_text="Search particulars, voucher no...",
+                                         height=28, font=ctk.CTkFont(size=11))
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        # Generate button
+        ctk.CTkButton(inner, text="⚡ Generate", width=100, height=28,
+                      font=ctk.CTkFont(size=11, weight="bold"),
+                      fg_color=self.PRIMARY_BLUE, hover_color=self.PRIMARY_HOVER,
+                      command=self._generate_report).pack(side="right")
+
+    # ------------------------------------------------------------------
+    def _build_table(self) -> None:
+        container = ctk.CTkFrame(self.main_frame, fg_color=self.CARD_BG,
+                                 corner_radius=config.CARD_CORNER_RADIUS,
+                                 border_width=1, border_color=self.CARD_BORDER)
+        container.pack(fill="both", expand=True, pady=(0, 4))
+        container.grid_rowconfigure(1, weight=1)
+        container.grid_columnconfigure(0, weight=1)
+        self.table_container = container
+
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure("Compact.Treeview",
+                        background=self.CARD_BG,
+                        fieldbackground=self.CARD_BG,
+                        foreground=self.TEXT_PRIMARY,
+                        rowheight=32,
+                        font=("Segoe UI", 10),
+                        borderwidth=0)
+        style.configure("Compact.Treeview.Heading",
+                        background=self.CARD_BORDER,
+                        foreground=self.TEXT_PRIMARY,
+                        font=("Segoe UI", 10, "bold"),
+                        relief="flat")
+        style.map("Compact.Treeview", background=[("selected", "#162544")])
+
+        # header row
+        header = ctk.CTkFrame(container, fg_color=self.CARD_BORDER, corner_radius=0, height=26)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_propagate(False)
+        for idx, col in enumerate(self._COLUMNS):
+            header.grid_columnconfigure(idx, weight=1 if col.get("stretch") else 0)
+            ctk.CTkLabel(header, text=col["heading"],
+                         font=ctk.CTkFont(size=10, weight="bold"),
+                         text_color=self.TEXT_PRIMARY,
+                         anchor="w" if col["anchor"] == "w" else "e").grid(
+                row=0, column=idx, sticky="ew",
+                padx=(8 if idx == 0 else 4,
+                      8 if idx == len(self._COLUMNS) - 1 else 4),
+                pady=1)
+
+        body = ctk.CTkScrollableFrame(container, fg_color="transparent",
+                                      corner_radius=0,
+                                      scrollbar_button_color=self.CARD_BORDER)
+        body.grid(row=1, column=0, sticky="nsew")
+        self.table_body = body
+
+        col_ids = [c["id"] for c in self._COLUMNS]
+        self.tree = ttk.Treeview(body, columns=col_ids, show="",
+                                 selectmode="browse", style="Compact.Treeview")
+        for col in self._COLUMNS:
+            self.tree.heading(col["id"], text=col["heading"])
+            self.tree.column(col["id"], width=col.get("width", 140),
+                             anchor=col.get("anchor", "w"),
+                             stretch=tk.YES if col.get("stretch") else tk.NO)
+        self.tree.pack(fill="both", expand=True)
+
+        # tags
+        self.tree.tag_configure("debit", foreground=self.RED)
+        self.tree.tag_configure("credit", foreground=self.GREEN)
+        self.tree.tag_configure("odd", background=self.BG_PRIMARY)
+
+        self.tree.bind("<ButtonRelease-1>", lambda e: None)
+        self.tree.bind("<Return>", lambda e: self._open_selected())
+        self.tree.bind("<KP_Enter>", lambda e: self._open_selected())
+        self.tree.bind("<Double-Button-1>", lambda e: self._open_selected())
+
+        self.empty_label = ctk.CTkLabel(container,
+                                        text="Select dates and generate the report to begin.",
+                                        font=ctk.CTkFont(size=13),
+                                        text_color=self.TEXT_MUTED)
+        self.empty_label.grid(row=1, column=0)
+
+    # ------------------------------------------------------------------
+    def _build_footer(self) -> None:
+        foot = ctk.CTkFrame(self.table_container, fg_color=self.CARD_BORDER,
+                            corner_radius=0, height=26)
+        foot.grid(row=2, column=0, sticky="ew")
+        foot.grid_propagate(False)
+        foot.grid_columnconfigure(0, weight=1)
+        foot.grid_columnconfigure(1, weight=0)
+
+        self.footer_left = ctk.CTkLabel(foot, text="Total Transactions: 0",
+                                        font=ctk.CTkFont(size=10, weight="bold"),
+                                        text_color=self.TEXT_SECONDARY, anchor="w")
+        self.footer_left.grid(row=0, column=0, sticky="w", padx=8, pady=2)
+
+        self.footer_right = ctk.CTkLabel(foot, text="",
+                                         font=ctk.CTkFont(size=10, weight="bold"),
+                                         text_color=self.TEXT_PRIMARY, anchor="e")
+        self.footer_right.grid(row=0, column=1, sticky="e", padx=8, pady=2)
+
+    # ------------------------------------------------------------------
+    def _build_shortcut_bar(self) -> None:
+        bar = ctk.CTkFrame(self.main_frame, fg_color=self.CARD_BG,
+                           corner_radius=config.CARD_CORNER_RADIUS,
+                           border_width=1, border_color=self.CARD_BORDER,
+                           height=26)
+        bar.pack(fill="x", pady=(0, 2))
+        bar.pack_propagate(False)
+        inner = ctk.CTkFrame(bar, fg_color="transparent")
+        inner.pack(fill="both", padx=8, pady=1)
+
+        ctk.CTkLabel(inner,
+                     text="ℹ Shows all vouchers in chronological order on the selected date range.",
+                     font=ctk.CTkFont(size=9), text_color=self.TEXT_MUTED).pack(side="left")
+
+        for key, desc in (("F5", "Refresh"), ("Ctrl+N", "New Voucher"),
+                          ("Enter", "Open / Edit"), ("Esc", "Back")):
+            badge = ctk.CTkFrame(inner, fg_color=self.CARD_BORDER, corner_radius=3)
+            badge.pack(side="right", padx=(4, 0))
+            ctk.CTkLabel(badge, text=key, font=ctk.CTkFont(size=9, weight="bold"),
+                         text_color=self.TEXT_PRIMARY).pack(side="left", padx=5, pady=1)
+            ctk.CTkLabel(badge, text=desc, font=ctk.CTkFont(size=9),
+                         text_color=self.TEXT_SECONDARY).pack(side="left", padx=(0,5), pady=1)
+
+    # ------------------------------------------------------------------
+    # Hooks that subclasses must implement
+    # ------------------------------------------------------------------
+    def _back(self) -> None:
+        back = getattr(self, "on_keyboard_back", None)
+        if callable(back):
+            back()
+
+    def _new_voucher(self) -> None:
+        raise NotImplementedError
+
+    def _open_selected(self) -> None:
+        raise NotImplementedError
+
+    def _view_selected(self) -> None:
+        raise NotImplementedError
+
+    def _generate_report(self) -> None:
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Helper to update footer totals (sub‑class calls with numbers)
+    # ------------------------------------------------------------------
+    def _update_footer(self, txn_count: int, debit: float, credit: float, diff: float) -> None:
+        diff_color = self.GREEN if diff >= 0 else self.RED
+        self.footer_left.configure(text=f"Total Transactions: {txn_count}")
+        self.footer_right.configure(
+            text=f"Total Debit: ₹{debit:,.2f}   Total Credit: ₹{credit:,.2f}   Diff: ₹{diff:,.2f}"
+        )
+        self.footer_right.configure(text_color=diff_color)
+
+    def _show_empty(self, msg: str) -> None:
+        self.empty_label.configure(text=msg)
+        self.empty_label.lift()
+        self.footer_left.configure(text="Total Transactions: 0")
+        self.footer_right.configure(text="")
+
+    def _hide_empty(self) -> None:
+        self.empty_label.lower()

@@ -35,6 +35,7 @@ import config
 from services.account_service import account_service
 from services.group_service import group_service
 from utils import dialogs
+from utils.debounce import Debouncer
 
 # List columns: (id, heading, width)
 _LEDGER_COLUMNS: List[Dict[str, Any]] = [
@@ -462,7 +463,8 @@ class _LedgerListState:
         self.main.grid_columnconfigure(0, weight=1)
 
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", owner._apply_search)
+        self._search_debouncer = Debouncer(self.main, delay_ms=250)
+        self.search_var.trace_add("write", lambda *_: self._search_debouncer.schedule(owner._apply_search))
         self.show_inactive_var = tk.BooleanVar(value=False)
         self.selected_id: Optional[int] = None
 

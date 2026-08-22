@@ -24,6 +24,7 @@ from ui.report_base import (
     wire_report_keyboard,
 )
 from utils import dialogs
+from utils.debounce import Debouncer
 
 PARTY_TYPES = ("Debtor", "Creditor", "All")
 REPORT_TYPES = ("Ledger", "Summary")
@@ -52,6 +53,7 @@ class PartyLedgerReportUI:
         self.from_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
         self.to_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
         self.search_var = tk.StringVar()
+        self._search_debouncer = Debouncer(self.main_frame, delay_ms=250)
 
         self.report_type_combo = make_readonly_combo(filters.body, list(REPORT_TYPES), self.report_type_var, 110)
         filters.add("Report", self.report_type_combo)
@@ -72,7 +74,7 @@ class PartyLedgerReportUI:
 
         # Party selector refresh on party-type / search changes.
         self.party_type_combo.configure(command=lambda _: self._load_parties())
-        self.search_entry.bind("<KeyRelease>", lambda _e: self._load_parties())
+        self.search_entry.bind("<KeyRelease>", lambda _e: self._search_debouncer.schedule(self._load_parties))
         self.report_type_combo.configure(command=lambda _: self._on_report_type_changed())
 
         self.ledger_table = ReportTable(self.main_frame, [

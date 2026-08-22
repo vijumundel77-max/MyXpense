@@ -23,6 +23,7 @@ from ui.report_base import (
     wire_report_keyboard,
 )
 from utils import dialogs
+from utils.debounce import Debouncer
 
 
 class TrialBalanceReportUI:
@@ -42,6 +43,7 @@ class TrialBalanceReportUI:
         filters = FilterBar(self.main_frame)
         self.as_on_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
         self.search_var = tk.StringVar()
+        self._search_debouncer = Debouncer(self.main_frame, delay_ms=250)
 
         filters.add("As On Date", make_date_picker(filters.body, self.as_on_date_var))
         self.search_entry = ctk.CTkEntry(filters.body, textvariable=self.search_var, width=200,
@@ -73,7 +75,7 @@ class TrialBalanceReportUI:
         )
 
         self.status = ReportStatusBar(self.main_frame)
-        self.search_entry.bind("<KeyRelease>", lambda _e: self._on_search_changed())
+        self.search_entry.bind("<KeyRelease>", lambda _e: self._search_debouncer.schedule(self._on_search_changed))
         wire_report_keyboard(self)
 
     def _back(self) -> None:

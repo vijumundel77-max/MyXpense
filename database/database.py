@@ -44,11 +44,22 @@ class Database:
                 self._memory_conn = sqlite3.connect(self.db_path)
                 self._memory_conn.row_factory = sqlite3.Row
                 self._memory_conn.execute("PRAGMA foreign_keys = ON;")
+                self._apply_pragmas(self._memory_conn)
             return self._memory_conn
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
+        self._apply_pragmas(conn)
         return conn
+
+    def _apply_pragmas(self, conn: sqlite3.Connection) -> None:
+        """Apply SQLite PRAGMA settings for performance optimization."""
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA cache_size = 10000;")
+        conn.execute("PRAGMA temp_store = MEMORY;")
+        conn.execute("PRAGMA mmap_size = 268435456;")  # 256MB
+        conn.execute("PRAGMA page_size = 4096;")
 
     @contextmanager
     def transaction(self) -> Generator[sqlite3.Cursor, None, None]:
@@ -397,6 +408,22 @@ class Database:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_vouchers_company_id
             ON vouchers(company_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_vouchers_company_date
+            ON vouchers(company_id, voucher_date)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_vouchers_comp_type
+            ON vouchers(company_id, voucher_type)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_vdetail_voucher_acc
+            ON voucher_details(voucher_id, account_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_accounts_company
+            ON accounts(company_id)
         """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_voucher_details_account_id

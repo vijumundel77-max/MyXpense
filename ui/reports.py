@@ -28,6 +28,7 @@ from ui.ageing_report import show_ageing_report
 from ui.trial_balance_report import show_trial_balance_report
 from ui.balance_sheet_report import show_balance_sheet_report
 from ui.profit_loss_report import show_profit_loss_report
+from utils.debounce import Debouncer
 
 
 class ReportsHubUI(ctk.CTkFrame):
@@ -217,7 +218,8 @@ class ReportsHubUI(ctk.CTkFrame):
         ).grid(row=0, column=0, padx=(config.SPACING_LG, config.SPACING_SM))
 
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", self._refresh_cards)
+        self._search_debouncer = Debouncer(self.main_frame, delay_ms=250)
+        self.search_var.trace_add("write", lambda *_: self._search_debouncer.schedule(self._refresh_cards))
         self.search_entry = ctk.CTkEntry(
             self.search_bar, textvariable=self.search_var, height=34,
             placeholder_text="Search reports...",

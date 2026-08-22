@@ -41,6 +41,7 @@ import config
 from services.company_backup_service import BackupError, CompanyBackupService
 from services.company_service import CompanyService, CompanyServiceError
 from utils import dialogs
+from utils.debounce import Debouncer
 
 # List columns: (id, heading, width)
 _LIST_COLUMNS: List[Dict[str, Any]] = [
@@ -475,7 +476,8 @@ class _CompanyListState:
         self.main.grid_columnconfigure(0, weight=1)
 
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", owner._apply_search)
+        self._search_debouncer = Debouncer(self.main, delay_ms=250)
+        self.search_var.trace_add("write", lambda *_: self._search_debouncer.schedule(owner._apply_search))
         self.selected_id: Optional[int] = None
 
         self._build_header()

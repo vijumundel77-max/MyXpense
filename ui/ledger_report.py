@@ -38,12 +38,12 @@ from ui.report_base import (
     FilterBar,
     ReportTable,
     ReportStatusBar,
-    ReportActionBar,
     make_date_picker,
     make_button,
     wire_report_keyboard,
 )
 from utils import dialogs
+from utils.debounce import Debouncer
 
 
 class LedgerReportUI:
@@ -76,12 +76,12 @@ class LedgerReportUI:
         self.from_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
         self.to_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self._refresh_search_results())
+        self._search_debouncer = Debouncer(self.main_frame, delay_ms=250)
+        self.search_var.trace_add("write", lambda *_: self._search_debouncer.schedule(self._refresh_search_results))
 
         self._build_header()
         self._build_selection_stage()
         self._build_statement_stage()
-        self._build_action_bar()
         self.status = ReportStatusBar(self.main_frame)
 
         self._load_accounts()
@@ -93,7 +93,7 @@ class LedgerReportUI:
     # ------------------------------------------------------------------ #
     def _build_header(self) -> None:
         header = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        header.pack(fill="x", pady=(0, config.SPACING_LG))
+        header.pack(fill="x", pady=(0, 2))
         self.header = header
 
         ctk.CTkButton(
@@ -104,12 +104,12 @@ class LedgerReportUI:
         title_block = ctk.CTkFrame(header, fg_color="transparent")
         title_block.pack(side="left", padx=(config.SPACING_MD, 0))
         ctk.CTkLabel(
-            title_block, text="Ledger", font=ctk.CTkFont(size=config.FONT_TITLE_SIZE, weight="bold"),
-        ).pack(anchor="w")
+            title_block, text="📖 Ledger", font=ctk.CTkFont(size=15, weight="bold"),
+        ).pack(side="left", anchor="w")
         ctk.CTkLabel(
-            title_block, text="Account ledger statement",
+            title_block, text="  Account ledger statement",
             font=ctk.CTkFont(size=12), text_color=config.COLOR_TEXT_SECONDARY,
-        ).pack(anchor="w")
+        ).pack(side="left", anchor="w")
 
         # Current ledger + active period badge (clearly visible, updates on
         # generate / F2 / Alt+F2).
@@ -142,23 +142,23 @@ class LedgerReportUI:
         prompt.grid(row=0, column=0, sticky="ew",
                     padx=config.SPACING_LG, pady=(config.SPACING_LG, 0))
         ctk.CTkLabel(
-            prompt, text="Select Ledger", font=ctk.CTkFont(size=15, weight="bold"),
+            prompt, text="Select Ledger", font=ctk.CTkFont(size=12, weight="bold"),
         ).pack(anchor="w")
         ctk.CTkLabel(
-            prompt, text="Type a ledger name to search, then press Enter to open its statement.",
-            font=ctk.CTkFont(size=12), text_color=config.COLOR_TEXT_SECONDARY,
-        ).pack(anchor="w", pady=(2, 0))
+            prompt, text="Type to search, press Enter to open statement.",
+            font=ctk.CTkFont(size=10), text_color=config.COLOR_TEXT_SECONDARY,
+        ).pack(anchor="w", pady=(0, 2))
 
         search_row = ctk.CTkFrame(stage, fg_color="transparent")
         search_row.grid(row=1, column=0, sticky="ew",
-                        padx=config.SPACING_LG, pady=(config.SPACING_MD, 0))
+                        padx=config.SPACING_LG, pady=(0, 0))
         search_row.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(
             search_row, text="⌕", font=ctk.CTkFont(size=18),
             text_color=config.COLOR_TEXT_SECONDARY,
         ).grid(row=0, column=0, padx=(0, config.SPACING_SM))
         self.search_entry = ctk.CTkEntry(
-            search_row, textvariable=self.search_var, height=34,
+            search_row, textvariable=self.search_var, height=28,
             placeholder_text="Type ledger name / code / group...",
             corner_radius=config.INPUT_CORNER_RADIUS,
         )
@@ -171,7 +171,7 @@ class LedgerReportUI:
         # Results list: Name | Code | Group.
         tree_frame = ctk.CTkFrame(stage, fg_color="transparent")
         tree_frame.grid(row=2, column=0, sticky="nsew",
-                        padx=config.SPACING_LG, pady=config.SPACING_MD)
+                        padx=config.SPACING_LG, pady=(0, config.SPACING_MD))
         tree_frame.grid_rowconfigure(0, weight=1)
         tree_frame.grid_columnconfigure(0, weight=1)
 
@@ -195,12 +195,24 @@ class LedgerReportUI:
         self.search_tree.bind("<Up>", self._on_tree_up)
         self.search_tree.bind("<Escape>", lambda _e: self.search_entry.focus_set())
 
-        self.search_hint = ctk.CTkLabel(
-            stage, text="↑ ↓  move   |   Enter  open ledger   |   Type to search",
-            font=ctk.CTkFont(size=11), text_color=config.COLOR_TEXT_MUTED, anchor="w",
-        )
-        self.search_hint.grid(row=3, column=0, sticky="ew",
-                              padx=config.SPACING_LG, pady=(0, config.SPACING_MD))
+        # Compact shortcut strip (26px)
+        shortcut_strip = ctk.CTkFrame(stage, fg_color="transparent", height=26)
+        shortcut_strip.grid(row=3, column=0, sticky="ew", padx=config.SPACING_LG, pady=(0, 4))
+        shortcut_strip.grid_propagate(False)
+        shortcut_strip.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            shortcut_strip,
+            text="ℹ Select a ledger to view transaction statement and balances.",
+            font=ctk.CTkFont(size=10), text_color=config.COLOR_TEXT_MUTED, anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+        badges = ctk.CTkFrame(shortcut_strip, fg_color="transparent")
+        badges.grid(row=0, column=1, sticky="e")
+        for txt in ("↑↓ Navigate", "Enter Open Statement", "Esc Back"):
+            ctk.CTkLabel(
+                badges, text=txt, font=ctk.CTkFont(size=9, weight="bold"),
+                text_color=config.COLOR_PRIMARY, fg_color=config.COLOR_BG_MUTED,
+                corner_radius=4, padx=6, pady=1,
+            ).pack(side="left", padx=2)
 
     def _build_statement_stage(self) -> None:
         """Ledger statement view (filters + table), hidden until selection."""
@@ -230,17 +242,6 @@ class LedgerReportUI:
         self.table.tree.bind("<KP_Enter>", lambda _e: self._open_selected_voucher())
         self.table.tree.bind("<Double-Button-1>", lambda _e: self._open_selected_voucher())
         self.table.tree.bind("<ButtonRelease-1>", self._on_row_selected)
-
-    def _build_action_bar(self) -> None:
-        ReportActionBar(
-            self.main_frame,
-            refresh=self._generate_report,
-            exports=[("Export CSV", self._export_to_csv),
-                     ("Export JSON", self._export_to_json),
-                     ("Export PNG", self._export_to_png)],
-            clear=self._clear_filters,
-            back=self._back,
-        )
 
     # ------------------------------------------------------------------ #
     # stage switching

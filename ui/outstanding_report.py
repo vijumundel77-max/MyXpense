@@ -24,6 +24,7 @@ from ui.report_base import (
     wire_report_keyboard,
 )
 from utils import dialogs
+from utils.debounce import Debouncer
 
 OUTSTANDING_TYPES = ("Receivable", "Payable", "All")
 REPORT_TYPES = ("Outstanding", "Ageing Summary", "Overdue Invoices")
@@ -49,6 +50,7 @@ class OutstandingReportUI:
         self.as_on_date_var = tk.StringVar(value=date.today().strftime(config.DISPLAY_DATE_FORMAT))
         self.include_zero_var = tk.BooleanVar(value=False)
         self.search_var = tk.StringVar()
+        self._search_debouncer = Debouncer(self.main_frame, delay_ms=250)
 
         self.report_type_combo = make_readonly_combo(filters.body, list(REPORT_TYPES), self.report_type_var, 160)
         filters.add("Report", self.report_type_combo)
@@ -112,7 +114,7 @@ class OutstandingReportUI:
         )
 
         self.report_type_combo.configure(command=lambda _: self._on_report_type_changed())
-        self.search_entry.bind("<KeyRelease>", lambda _e: self._on_search_changed())
+        self.search_entry.bind("<KeyRelease>", lambda _e: self._search_debouncer.schedule(self._on_search_changed))
         wire_report_keyboard(self)
 
     def _back(self) -> None:

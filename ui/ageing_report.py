@@ -24,6 +24,7 @@ from ui.report_base import (
     wire_report_keyboard,
 )
 from utils import dialogs
+from utils.debounce import Debouncer
 
 AGEING_TYPES = ("Receivable", "Payable")
 DEFAULT_BUCKETS_STRING = "0-30, 31-60, 61-90, 91-180, 181-999"
@@ -49,6 +50,7 @@ class AgeingReportUI:
         self.use_custom_buckets_var = tk.BooleanVar(value=False)
         self.custom_buckets_var = tk.StringVar(value=DEFAULT_BUCKETS_STRING)
         self.search_var = tk.StringVar()
+        self._search_debouncer = Debouncer(self.main_frame, delay_ms=250)
 
         self.ageing_type_combo = make_readonly_combo(filters.body, list(AGEING_TYPES), self.ageing_type_var, 130)
         filters.add("Ageing Type", self.ageing_type_combo)
@@ -114,7 +116,7 @@ class AgeingReportUI:
             back=self._back,
         )
 
-        self.search_entry.bind("<KeyRelease>", lambda _e: self._on_search_changed())
+        self.search_entry.bind("<KeyRelease>", lambda _e: self._search_debouncer.schedule(self._on_search_changed))
         wire_report_keyboard(self)
 
     def _back(self) -> None:

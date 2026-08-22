@@ -13,6 +13,7 @@ import customtkinter as ctk
 
 import config
 from services.transaction_service import transaction_service
+from utils.debounce import Debouncer
 
 
 class TransactionEntryUI:
@@ -56,7 +57,8 @@ class TransactionEntryUI:
         self.time_var = tk.StringVar(value=datetime.now().strftime("%H:%M"))
         self.notes_var = tk.StringVar()
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", self._apply_search)
+        self._search_debouncer = Debouncer(self.main_frame, delay_ms=250)
+        self.search_var.trace_add("write", lambda *_: self._search_debouncer.schedule(self._apply_search))
 
         row1 = ctk.CTkFrame(form, fg_color="transparent")
         row1.pack(fill="x", padx=10, pady=(10, 0))
