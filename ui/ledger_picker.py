@@ -158,12 +158,13 @@ class LedgerPicker(ctk.CTkFrame):
         columns = ("name", "group")
         self.tree = ttk.Treeview(
             frame, columns=columns, show="headings", selectmode="browse",
-            height=8, style=_PICKER_STYLE,
+            height=5, style=_PICKER_STYLE,
         )
         self.tree.heading("name", text="Ledger / Party")
         self.tree.heading("group", text="Under")
-        self.tree.column("name", width=max(200, self.width - 130), anchor="w")
-        self.tree.column("group", width=120, anchor="w")
+        # Column widths will be set dynamically in _show_popup based on actual entry width
+        self.tree.column("name", width=180, anchor="w")
+        self.tree.column("group", width=100, anchor="w")
         vsb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -239,10 +240,52 @@ class LedgerPicker(ctk.CTkFrame):
             return
         try:
             self.entry.update_idletasks()
-            x = self.entry.winfo_rootx()
-            y = self.entry.winfo_rooty() + self.entry.winfo_height() + 2
-            width = max(self.width + 8, 320)
-            self.popup.geometry(f"{width}x{190}+{x}+{y}")
+
+            # Use the entry's actual rendered width; fall back to the parent
+            # LedgerPicker frame width when the entry was created with width=0
+            # (common in grid-based layouts).
+            entry_width = self.entry.winfo_width()
+            if entry_width <= 1:
+                try:
+                    entry_width = self.winfo_width()
+                except Exception:
+                    pass
+            # Clamp width to a sensible range: min 300, max 480
+            width = max(300, min(entry_width, 480))
+            # Height for ~5 data rows + heading row (stays within 100-140px).
+            height = 140
+
+            # Update treeview column widths based on actual popup width
+            name_col_width = max(160, width - 160)
+            self.tree.column("name", width=name_col_width)
+            self.tree.column("group", width=120)
+
+            # Entry screen coordinates
+            entry_x = self.entry.winfo_rootx()
+            entry_y = self.entry.winfo_rooty()
+            entry_h = self.entry.winfo_height()
+
+            # Screen dimensions
+            screen_w = self.entry.winfo_screenwidth()
+            screen_h = self.entry.winfo_screenheight()
+
+            # Initial position below the entry, aligned to entry's left edge
+            x = entry_x
+            y = entry_y + entry_h + 2
+
+            # Horizontal clamp
+            if x + width > screen_w:
+                x = screen_w - width - 4
+            if x < 0:
+                x = 4
+
+            # Vertical clamp: if not enough space below, show above the entry
+            if y + height > screen_h:
+                y = entry_y - height - 2
+                if y < 0:
+                    y = 4
+
+            self.popup.geometry(f"{width}x{height}+{x}+{y}")
             self.popup.deiconify()
             self.popup.lift()
             self.popup.attributes("-topmost", True)

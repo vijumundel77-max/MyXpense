@@ -168,12 +168,22 @@ class VoucherEntryUITest(unittest.TestCase):
         self._sync()
         self.assertEqual(self.ui.party_picker.winfo_manager(), "")
 
-    def test_payment_and_receipt_show_party_field(self):
+    def test_payment_and_receipt_hide_party_field(self):
         self.ui.type_var.set(VOUCHER_PAYMENT)
         self.ui._on_type_changed()
         self._sync()
-        self.assertNotEqual(self.ui.party_picker.winfo_manager(), "")
+        self.assertEqual(self.ui.party_picker.winfo_manager(), "")
         self.ui.type_var.set(VOUCHER_RECEIPT)
+        self.ui._on_type_changed()
+        self._sync()
+        self.assertEqual(self.ui.party_picker.winfo_manager(), "")
+
+    def test_sales_and_purchase_show_party_field(self):
+        self.ui.type_var.set(VOUCHER_SALES)
+        self.ui._on_type_changed()
+        self._sync()
+        self.assertNotEqual(self.ui.party_picker.winfo_manager(), "")
+        self.ui.type_var.set(VOUCHER_PURCHASE)
         self.ui._on_type_changed()
         self._sync()
         self.assertNotEqual(self.ui.party_picker.winfo_manager(), "")

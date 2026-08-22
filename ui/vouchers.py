@@ -241,22 +241,22 @@ class VouchersFrame(ctk.CTkFrame):
         # Voucher No.
         self._build_meta_field(2, "Voucher No.", self._build_number_label_widget)
 
-        # Party A/C Name (right aligned)
-        party_holder = ctk.CTkFrame(self.meta_card, fg_color="transparent")
-        party_holder.grid(row=0, column=3, sticky="e", padx=(pad_x, pad_x), pady=pad_y)
-        party_holder.grid_rowconfigure(0, weight=1)
+        # Party A/C Name (right aligned) - stored for toggling visibility
+        self.party_holder = ctk.CTkFrame(self.meta_card, fg_color="transparent")
+        self.party_holder.grid(row=0, column=3, sticky="e", padx=(pad_x, pad_x), pady=pad_y)
+        self.party_holder.grid_rowconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            party_holder, text="Party A/C Name",
+            self.party_holder, text="Party A/C Name",
             font=ctk.CTkFont(size=10),
             text_color="#64748B", anchor="w",
         ).pack(anchor="w")
 
-        party_row = ctk.CTkFrame(party_holder, fg_color="transparent")
-        party_row.pack(fill="x", pady=(1, 0))
+        self.party_row = ctk.CTkFrame(self.party_holder, fg_color="transparent")
+        self.party_row.pack(fill="x", pady=(1, 0))
 
         self.party_picker = LedgerPicker(
-            party_row, self.company_id, width=180,
+            self.party_row, self.company_id, width=180,
             groups=PARTY_GROUPS, on_selected=lambda _id: self._on_party_selected(),
             on_add_new=self._add_ledger_modal,
             placeholder="Select or type party name...",
@@ -337,6 +337,7 @@ class VouchersFrame(ctk.CTkFrame):
     def _on_type_changed(self) -> None:
         self._update_number_preview()
         self._sync_flow()
+        self._toggle_party_field()
         self._update_balance()
 
     # ------------------------------------------------------------------ #
@@ -573,15 +574,10 @@ class VouchersFrame(ctk.CTkFrame):
                 pass
 
     def _apply_row_presentation(self, row: Dict[str, Any]) -> None:
-        to_line = bool(row.get("to_line"))
-        if to_line:
-            row["to_label"].grid()
-            row["picker"].entry.configure(text_color=config.COLOR_PRIMARY)
-            row["picker"].entry.configure(placeholder_text="Enter Ledger / Party")
-        else:
-            row["to_label"].grid_remove()
-            row["picker"].entry.configure(text_color=config.VOUCHER_INPUT_TEXT)
-            row["picker"].entry.configure(placeholder_text="Enter Particulars")
+        # Always hide the "To" prefix; second row behaves like a normal particulars row
+        row["to_label"].grid_remove()
+        row["picker"].entry.configure(text_color=config.VOUCHER_INPUT_TEXT)
+        row["picker"].entry.configure(placeholder_text="Enter Particulars")
 
     def _on_row_selected(self, row: Dict[str, Any]) -> None:
         if row.get("to_line"):
@@ -673,7 +669,8 @@ class VouchersFrame(ctk.CTkFrame):
         return False
 
     def _focus_first_field(self) -> None:
-        if self.party_picker is not None:
+        # Focus Party A/C Name only when it is visible (Sales / Purchase)
+        if self.party_picker is not None and self.party_holder.winfo_ismapped():
             self.party_picker.focus_entry()
         elif self.rows:
             self.rows[0]["picker"].focus_entry()
@@ -1097,6 +1094,24 @@ class VouchersFrame(ctk.CTkFrame):
                 picker.set_group_filter(PARTY_GROUPS + ["Sales"] if not row.get("to_line") else CASH_BANK_GROUPS)
             elif vtype == VOUCHER_PURCHASE:
                 picker.set_group_filter(["Purchases", "Expenses"] if not row.get("to_line") else PARTY_GROUPS + CASH_BANK_GROUPS)
+
+    def _toggle_party_field(self) -> None:
+        """Show Party A/C Name only for Sales and Purchase vouchers."""
+        vtype = self.type_var.get()
+        if vtype in (VOUCHER_SALES, VOUCHER_PURCHASE):
+            self.party_holder.grid()
+            # ensure picker is packed inside its row
+            try:
+                self.party_picker.pack(side="left", fill="x", expand=True)
+            except Exception:
+                pass
+        else:
+            # hide picker completely so winfo_manager() returns ""
+            try:
+                self.party_picker.pack_forget()
+            except Exception:
+                pass
+            self.party_holder.grid_remove()
 
     # ------------------------------------------------------------------ #
     # Voucher Operations
